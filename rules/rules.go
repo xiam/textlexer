@@ -204,7 +204,7 @@ func NewLiteralMatchTokenRule(match string) func(r rune) (textlexer.Rule, textle
 	}
 }
 
-func NewCaselessLiteralMatchTokenRule(match string) func(r rune) (textlexer.Rule, textlexer.State) {
+func NewCaseInsensitiveLiteralMatchTokenRule(match string) func(r rune) (textlexer.Rule, textlexer.State) {
 	if match == "" {
 		return AcceptTokenRule
 	}
@@ -508,6 +508,42 @@ func SlashStarCommentTokenRule(r rune) (textlexer.Rule, textlexer.State) {
 			AcceptTokenRule,
 		),
 	)(r)
+}
+
+func NewMatchAnyOf(rules ...textlexer.Rule) func(r rune) (textlexer.Rule, textlexer.State) {
+	var matchAnyOf func([]textlexer.Rule) textlexer.Rule
+
+	matchAnyOf = func(rules []textlexer.Rule) textlexer.Rule {
+		return func(r rune) (textlexer.Rule, textlexer.State) {
+			var next textlexer.Rule
+			var state textlexer.State
+
+			matched := []textlexer.Rule{}
+
+			for i := range rules {
+				next, state = rules[i](r)
+				if state == textlexer.StateAccept {
+					return nil, textlexer.StateAccept
+				}
+
+				if state == textlexer.StateContinue {
+					if next != nil {
+						matched = append(matched, next)
+					} else {
+						matched = append(matched, rules[i])
+					}
+				}
+			}
+
+			if len(matched) > 0 {
+				return matchAnyOf(matched), textlexer.StateContinue
+			}
+
+			return nil, textlexer.StateReject
+		}
+	}
+
+	return matchAnyOf(rules)
 }
 
 func LParenTokenRule(r rune) (textlexer.Rule, textlexer.State) {

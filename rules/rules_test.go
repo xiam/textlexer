@@ -470,7 +470,7 @@ func TestInvertTokenRule(t *testing.T) {
 			},
 		}
 
-		invertTokenRule := rules.InvertTokenRule(rules.NewCaselessLiteralMatchTokenRule("abc"))
+		invertTokenRule := rules.InvertTokenRule(rules.NewCaseInsensitiveLiteralMatchTokenRule("abc"))
 
 		runTestInputAndMatches(t, testCases, invertTokenRule)
 	})
@@ -748,7 +748,7 @@ func TestLiteralMatchTokenRule(t *testing.T) {
 	runTestInputAndMatches(t, testCases, matchDefKeywordTokenRule)
 }
 
-func TestCaselessLiteralMatchTokenRule(t *testing.T) {
+func TestCaseInsensitiveLiteralMatchTokenRule(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
 			"",
@@ -780,7 +780,7 @@ func TestCaselessLiteralMatchTokenRule(t *testing.T) {
 		},
 	}
 
-	matchDefKeywordTokenRule := rules.NewCaselessLiteralMatchTokenRule("abc")
+	matchDefKeywordTokenRule := rules.NewCaseInsensitiveLiteralMatchTokenRule("abc")
 
 	runTestInputAndMatches(t, testCases, matchDefKeywordTokenRule)
 }
@@ -923,12 +923,38 @@ func TestComposeTokensRule(t *testing.T) {
 	}
 
 	orderByTokenRule := rules.ComposeTokenRules(
-		rules.NewCaselessLiteralMatchTokenRule("ORDER"),
+		rules.NewCaseInsensitiveLiteralMatchTokenRule("ORDER"),
 		rules.WhitespaceTokenRule,
-		rules.NewCaselessLiteralMatchTokenRule("BY"),
+		rules.NewCaseInsensitiveLiteralMatchTokenRule("BY"),
 	)
 
 	runTestInputAndMatches(t, testCases, orderByTokenRule)
+}
+
+func TestAnyMatch(t *testing.T) {
+	testCases := []inputAndMatchesCase{
+		{
+			"",
+			nil,
+		},
+		{
+			"abc",
+			[]string{"abc"},
+		},
+		{
+			"abcdeg defabcghiabc",
+			[]string{"abc", "def", "abc", "ghi", "abc"},
+		},
+	}
+
+	anyMatchTokenRule := rules.NewMatchAnyOf(
+		rules.NewCaseInsensitiveLiteralMatchTokenRule("ABCDEF"), // will never match
+		rules.NewCaseInsensitiveLiteralMatchTokenRule("ABC"),
+		rules.NewCaseInsensitiveLiteralMatchTokenRule("DEF"),
+		rules.NewCaseInsensitiveLiteralMatchTokenRule("GHI"),
+	)
+
+	runTestInputAndMatches(t, testCases, anyMatchTokenRule)
 }
 
 func runTestInputAndMatches(t *testing.T, testCases []inputAndMatchesCase, initialRule textlexer.Rule) {
