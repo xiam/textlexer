@@ -7,23 +7,23 @@ import (
 )
 
 func AlwaysReject(r rune) (textlexer.Rule, textlexer.State) {
-	return nil, textlexer.StateReject
+	return AlwaysReject, textlexer.StateReject
 }
 
 func AlwaysAccept(r rune) (textlexer.Rule, textlexer.State) {
-	return nil, textlexer.StateAccept
+	return AlwaysAccept, textlexer.StateAccept
 }
 
 func AlwaysContinue(r rune) (textlexer.Rule, textlexer.State) {
-	return nil, textlexer.StateContinue
+	return AlwaysContinue, textlexer.StateContinue
 }
 
-func UnsignedIntegerTokenRule(r rune) (textlexer.Rule, textlexer.State) {
+func UnsignedIntegerLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
 	var nextDigit textlexer.Rule
 
 	nextDigit = func(r rune) (textlexer.Rule, textlexer.State) {
 		// can be followed by more digits
-		if unicode.IsDigit(r) {
+		if isNumeric(r) {
 			return nextDigit, textlexer.StateContinue
 		}
 
@@ -31,7 +31,7 @@ func UnsignedIntegerTokenRule(r rune) (textlexer.Rule, textlexer.State) {
 	}
 
 	// starts with a digit
-	if unicode.IsDigit(r) {
+	if isNumeric(r) {
 		return nextDigit, textlexer.StateContinue
 	}
 
@@ -46,7 +46,7 @@ func WhitespaceDelimiterRule(r rune) (textlexer.Rule, textlexer.State) {
 	return nil, textlexer.StateReject
 }
 
-func SignedIntegerTokenRule(r rune) (textlexer.Rule, textlexer.State) {
+func SignedIntegerLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
 	var discardWhitespace textlexer.Rule
 
 	discardWhitespace = func(r rune) (textlexer.Rule, textlexer.State) {
@@ -54,7 +54,7 @@ func SignedIntegerTokenRule(r rune) (textlexer.Rule, textlexer.State) {
 			return discardWhitespace, textlexer.StateReject
 		}
 
-		return UnsignedIntegerTokenRule(r)
+		return UnsignedIntegerLexemeRule(r)
 	}
 
 	// a signed integer may start with a minus or plus sign
@@ -63,14 +63,14 @@ func SignedIntegerTokenRule(r rune) (textlexer.Rule, textlexer.State) {
 		return discardWhitespace, textlexer.StateContinue
 	}
 
-	return UnsignedIntegerTokenRule(r)
+	return UnsignedIntegerLexemeRule(r)
 }
 
-func UnsignedFloatTokenRule(r rune) (textlexer.Rule, textlexer.State) {
+func UnsignedFloatLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
 	var integerPart, radixPoint, fractionalPart textlexer.Rule
 
 	integerPart = func(r rune) (textlexer.Rule, textlexer.State) {
-		if unicode.IsDigit(r) {
+		if isNumeric(r) {
 			return integerPart, textlexer.StateContinue
 		}
 
@@ -82,7 +82,7 @@ func UnsignedFloatTokenRule(r rune) (textlexer.Rule, textlexer.State) {
 		if r == '.' {
 			return func(r rune) (textlexer.Rule, textlexer.State) {
 				// expects a digit immediately after the radix point
-				if unicode.IsDigit(r) {
+				if isNumeric(r) {
 					return fractionalPart, textlexer.StateContinue
 				}
 
@@ -94,21 +94,21 @@ func UnsignedFloatTokenRule(r rune) (textlexer.Rule, textlexer.State) {
 	}
 
 	fractionalPart = func(r rune) (textlexer.Rule, textlexer.State) {
-		if unicode.IsDigit(r) {
+		if isNumeric(r) {
 			return fractionalPart, textlexer.StateContinue
 		}
 
 		return nil, textlexer.StateAccept
 	}
 
-	if unicode.IsDigit(r) {
+	if isNumeric(r) {
 		return integerPart, textlexer.StateContinue
 	}
 
 	return radixPoint(r)
 }
 
-func NewSingleMatchTokenRule(match rune) func(r rune) (textlexer.Rule, textlexer.State) {
+func NewSingleMatchLexemeRule(match rune) func(r rune) (textlexer.Rule, textlexer.State) {
 	anyChar := func(r rune) (textlexer.Rule, textlexer.State) {
 		return nil, textlexer.StateAccept
 	}
@@ -177,9 +177,9 @@ func NewChainAnyAfterLiteralMatchRule(match string, next textlexer.Rule) func(r 
 	}
 }
 
-func NewLiteralMatchTokenRule(match string) func(r rune) (textlexer.Rule, textlexer.State) {
+func NewLiteralMatchLexemeRule(match string) func(r rune) (textlexer.Rule, textlexer.State) {
 	if match == "" {
-		return AcceptTokenRule
+		return AcceptLexemeRule
 	}
 
 	return func(r rune) (textlexer.Rule, textlexer.State) {
@@ -204,9 +204,9 @@ func NewLiteralMatchTokenRule(match string) func(r rune) (textlexer.Rule, textle
 	}
 }
 
-func NewCaseInsensitiveLiteralMatchTokenRule(match string) func(r rune) (textlexer.Rule, textlexer.State) {
+func NewCaseInsensitiveLiteralMatchLexemeRule(match string) func(r rune) (textlexer.Rule, textlexer.State) {
 	if match == "" {
-		return AcceptTokenRule
+		return AcceptLexemeRule
 	}
 
 	return func(r rune) (textlexer.Rule, textlexer.State) {
@@ -231,7 +231,65 @@ func NewCaseInsensitiveLiteralMatchTokenRule(match string) func(r rune) (textlex
 	}
 }
 
-func SignedFloatTokenRule(r rune) (textlexer.Rule, textlexer.State) {
+func NumericLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
+	var discardWhitespace, expectInteger, scanInteger, expectDecimal, scanDecimal textlexer.Rule
+
+	scanDecimal = func(r rune) (textlexer.Rule, textlexer.State) {
+		if isNumeric(r) {
+			return scanDecimal, textlexer.StateContinue
+		}
+
+		return nil, textlexer.StateAccept
+	}
+
+	scanInteger = func(r rune) (textlexer.Rule, textlexer.State) {
+		if isNumeric(r) {
+			return scanInteger, textlexer.StateContinue
+		}
+
+		if r == '.' {
+			return scanDecimal, textlexer.StateContinue
+		}
+
+		return nil, textlexer.StateAccept
+	}
+
+	expectDecimal = func(r rune) (textlexer.Rule, textlexer.State) {
+		if isNumeric(r) {
+			return scanDecimal, textlexer.StateContinue
+		}
+
+		return nil, textlexer.StateReject
+	}
+
+	expectInteger = func(r rune) (textlexer.Rule, textlexer.State) {
+		if isNumeric(r) {
+			return scanInteger, textlexer.StateContinue
+		}
+
+		if r == '.' {
+			return expectDecimal, textlexer.StateContinue
+		}
+
+		return nil, textlexer.StateReject
+	}
+
+	discardWhitespace = func(r rune) (textlexer.Rule, textlexer.State) {
+		if unicode.IsSpace(r) {
+			return discardWhitespace, textlexer.StateReject
+		}
+
+		return expectInteger(r)
+	}
+
+	if r == '-' || r == '+' {
+		return discardWhitespace, textlexer.StateContinue
+	}
+
+	return expectInteger(r)
+}
+
+func SignedFloatLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
 	var discardWhitespace textlexer.Rule
 
 	discardWhitespace = func(r rune) (textlexer.Rule, textlexer.State) {
@@ -239,17 +297,17 @@ func SignedFloatTokenRule(r rune) (textlexer.Rule, textlexer.State) {
 			return discardWhitespace, textlexer.StateReject
 		}
 
-		return UnsignedFloatTokenRule(r)
+		return UnsignedFloatLexemeRule(r)
 	}
 
 	if r == '-' || r == '+' {
 		return discardWhitespace, textlexer.StateContinue
 	}
 
-	return UnsignedFloatTokenRule(r)
+	return UnsignedFloatLexemeRule(r)
 }
 
-func WhitespaceTokenRule(r rune) (textlexer.Rule, textlexer.State) {
+func WhitespaceLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
 	var nextSpace textlexer.Rule
 
 	nextSpace = func(r rune) (textlexer.Rule, textlexer.State) {
@@ -267,12 +325,12 @@ func WhitespaceTokenRule(r rune) (textlexer.Rule, textlexer.State) {
 	return nil, textlexer.StateReject
 }
 
-func WordTokenRule(r rune) (next textlexer.Rule, state textlexer.State) {
+func WordLexemeRule(r rune) (next textlexer.Rule, state textlexer.State) {
 	var nextLetter textlexer.Rule
 
 	nextLetter = func(r rune) (textlexer.Rule, textlexer.State) {
 		// can be followed by more letters or digits
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+		if unicode.IsLetter(r) || isNumeric(r) {
 			return nextLetter, textlexer.StateContinue
 		}
 
@@ -288,12 +346,12 @@ func WordTokenRule(r rune) (next textlexer.Rule, state textlexer.State) {
 	return nil, textlexer.StateReject
 }
 
-func DoubleQuotedStringTokenRule(r rune) (textlexer.Rule, textlexer.State) {
+func DoubleQuotedStringLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
 	var nextChar textlexer.Rule
 
 	nextChar = func(r rune) (textlexer.Rule, textlexer.State) {
 		if r == '"' {
-			return AcceptTokenRule, textlexer.StateContinue
+			return AcceptLexemeRule, textlexer.StateContinue
 		}
 
 		if textlexer.IsEOF(r) {
@@ -310,12 +368,12 @@ func DoubleQuotedStringTokenRule(r rune) (textlexer.Rule, textlexer.State) {
 	return nil, textlexer.StateReject
 }
 
-func SingleQuotedStringTokenRule(r rune) (textlexer.Rule, textlexer.State) {
+func SingleQuotedStringLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
 	var nextChar textlexer.Rule
 
 	nextChar = func(r rune) (textlexer.Rule, textlexer.State) {
 		if r == '\'' {
-			return AcceptTokenRule, textlexer.StateContinue
+			return AcceptLexemeRule, textlexer.StateContinue
 		}
 
 		if textlexer.IsEOF(r) {
@@ -332,7 +390,7 @@ func SingleQuotedStringTokenRule(r rune) (textlexer.Rule, textlexer.State) {
 	return nil, textlexer.StateReject
 }
 
-func DoubleQuotedFormattedStringTokenRule(r rune) (textlexer.Rule, textlexer.State) {
+func DoubleQuotedFormattedStringLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
 	var nextChar textlexer.Rule
 
 	nextChar = func(r rune) (textlexer.Rule, textlexer.State) {
@@ -341,7 +399,7 @@ func DoubleQuotedFormattedStringTokenRule(r rune) (textlexer.Rule, textlexer.Sta
 		}
 
 		if r == '"' {
-			return AcceptTokenRule, textlexer.StateContinue
+			return AcceptLexemeRule, textlexer.StateContinue
 		}
 
 		if r == '\\' {
@@ -364,21 +422,21 @@ func DoubleQuotedFormattedStringTokenRule(r rune) (textlexer.Rule, textlexer.Sta
 	return nil, textlexer.StateReject
 }
 
-func InlineCommentTokenRule(r rune) (textlexer.Rule, textlexer.State) {
-	return NewChainAnyAfterLiteralMatchRule("//", UntilEOLTokenRule)(r)
+func InlineCommentLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
+	return NewChainAnyAfterLiteralMatchRule("//", UntilEOLLexemeRule)(r)
 }
 
-func UntilEOFTokenRule(r rune) (textlexer.Rule, textlexer.State) {
+func UntilEOFLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
 	return func(r rune) (textlexer.Rule, textlexer.State) {
 		if textlexer.IsEOF(r) {
 			return nil, textlexer.StateAccept
 		}
 
-		return UntilEOFTokenRule, textlexer.StateContinue
+		return UntilEOFLexemeRule, textlexer.StateContinue
 	}(r)
 }
 
-func UntilEOLTokenRule(r rune) (textlexer.Rule, textlexer.State) {
+func UntilEOLLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
 	var untilNewLine textlexer.Rule
 
 	untilNewLine = func(r rune) (textlexer.Rule, textlexer.State) {
@@ -392,19 +450,19 @@ func UntilEOLTokenRule(r rune) (textlexer.Rule, textlexer.State) {
 	return untilNewLine(r)
 }
 
-func AcceptTokenRule(r rune) (textlexer.Rule, textlexer.State) {
+func AcceptLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
 	return nil, textlexer.StateAccept
 }
 
-func BasicMathOperatorTokenRule(r rune) (textlexer.Rule, textlexer.State) {
+func BasicMathOperatorLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
 	if r == '+' || r == '-' || r == '*' || r == '/' {
-		return AcceptTokenRule, textlexer.StateContinue
+		return AcceptLexemeRule, textlexer.StateContinue
 	}
 
 	return nil, textlexer.StateReject
 }
 
-func InvertTokenRule(rule textlexer.Rule) func(r rune) (textlexer.Rule, textlexer.State) {
+func InvertLexemeRule(rule textlexer.Rule) func(r rune) (textlexer.Rule, textlexer.State) {
 	var contRejected func(textlexer.Rule) func(rune) (textlexer.Rule, textlexer.State)
 	var contContinued func(textlexer.Rule) func(rune) (textlexer.Rule, textlexer.State)
 
@@ -469,7 +527,7 @@ func InvertTokenRule(rule textlexer.Rule) func(r rune) (textlexer.Rule, textlexe
 	}
 }
 
-func ComposeTokenRules(rules ...func(r rune) (textlexer.Rule, textlexer.State)) func(r rune) (textlexer.Rule, textlexer.State) {
+func ComposeLexemeRules(rules ...func(r rune) (textlexer.Rule, textlexer.State)) func(r rune) (textlexer.Rule, textlexer.State) {
 	var match func(int, textlexer.Rule) func(r rune) (textlexer.Rule, textlexer.State)
 
 	match = func(offset int, rule textlexer.Rule) func(r rune) (textlexer.Rule, textlexer.State) {
@@ -500,12 +558,12 @@ func ComposeTokenRules(rules ...func(r rune) (textlexer.Rule, textlexer.State)) 
 	return match(0, nil)
 }
 
-func SlashStarCommentTokenRule(r rune) (textlexer.Rule, textlexer.State) {
+func SlashStarCommentLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
 	return NewChainAnyAfterLiteralMatchRule(
 		"/*",
 		NewChainAnyUntilLiteralMatchRule(
 			"*/",
-			AcceptTokenRule,
+			AcceptLexemeRule,
 		),
 	)(r)
 }
@@ -546,90 +604,97 @@ func NewMatchAnyOf(rules ...textlexer.Rule) func(r rune) (textlexer.Rule, textle
 	return matchAnyOf(rules)
 }
 
-func LParenTokenRule(r rune) (textlexer.Rule, textlexer.State) {
-	return NewSingleMatchTokenRule('(')(r)
+func LParenLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
+	return NewSingleMatchLexemeRule('(')(r)
 }
 
-func RParenTokenRule(r rune) (textlexer.Rule, textlexer.State) {
-	return NewSingleMatchTokenRule(')')(r)
+func RParenLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
+	return NewSingleMatchLexemeRule(')')(r)
 }
 
-func LBraceTokenRule(r rune) (textlexer.Rule, textlexer.State) {
-	return NewSingleMatchTokenRule('{')(r)
+func LBraceLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
+	return NewSingleMatchLexemeRule('{')(r)
 }
 
-func RBraceTokenRule(r rune) (textlexer.Rule, textlexer.State) {
-	return NewSingleMatchTokenRule('}')(r)
+func RBraceLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
+	return NewSingleMatchLexemeRule('}')(r)
 }
 
-func LBracketTokenRule(r rune) (textlexer.Rule, textlexer.State) {
-	return NewSingleMatchTokenRule('[')(r)
+func LBracketLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
+	return NewSingleMatchLexemeRule('[')(r)
 }
 
-func RBracketTokenRule(r rune) (textlexer.Rule, textlexer.State) {
-	return NewSingleMatchTokenRule(']')(r)
+func RBracketLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
+	return NewSingleMatchLexemeRule(']')(r)
 }
 
-func LAngleTokenRule(r rune) (textlexer.Rule, textlexer.State) {
-	return NewSingleMatchTokenRule('<')(r)
+func LAngleLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
+	return NewSingleMatchLexemeRule('<')(r)
 }
 
-func RAngleTokenRule(r rune) (textlexer.Rule, textlexer.State) {
-	return NewSingleMatchTokenRule('>')(r)
+func RAngleLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
+	return NewSingleMatchLexemeRule('>')(r)
 }
 
-func CommaTokenRule(r rune) (textlexer.Rule, textlexer.State) {
-	return NewSingleMatchTokenRule(',')(r)
+func CommaLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
+	return NewSingleMatchLexemeRule(',')(r)
 }
 
-func ColonTokenRule(r rune) (textlexer.Rule, textlexer.State) {
-	return NewSingleMatchTokenRule(':')(r)
+func ColonLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
+	return NewSingleMatchLexemeRule(':')(r)
 }
 
-func SemicolonTokenRule(r rune) (textlexer.Rule, textlexer.State) {
-	return NewSingleMatchTokenRule(';')(r)
+func SemicolonLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
+	return NewSingleMatchLexemeRule(';')(r)
 }
 
-func PeriodTokenRule(r rune) (textlexer.Rule, textlexer.State) {
-	return NewSingleMatchTokenRule('.')(r)
+func PeriodLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
+	return NewSingleMatchLexemeRule('.')(r)
 }
 
-func PlusTokenRule(r rune) (textlexer.Rule, textlexer.State) {
-	return NewSingleMatchTokenRule('+')(r)
+func PlusLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
+	return NewSingleMatchLexemeRule('+')(r)
 }
 
-func MinusTokenRule(r rune) (textlexer.Rule, textlexer.State) {
-	return NewSingleMatchTokenRule('-')(r)
+func MinusLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
+	return NewSingleMatchLexemeRule('-')(r)
 }
 
-func StarTokenRule(r rune) (textlexer.Rule, textlexer.State) {
-	return NewSingleMatchTokenRule('*')(r)
+func StarLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
+	return NewSingleMatchLexemeRule('*')(r)
 }
 
-func SlashTokenRule(r rune) (textlexer.Rule, textlexer.State) {
-	return NewSingleMatchTokenRule('/')(r)
+func SlashLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
+	return NewSingleMatchLexemeRule('/')(r)
 }
 
-func PercentTokenRule(r rune) (textlexer.Rule, textlexer.State) {
-	return NewSingleMatchTokenRule('%')(r)
+func PercentLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
+	return NewSingleMatchLexemeRule('%')(r)
 }
 
-func EqualTokenRule(r rune) (textlexer.Rule, textlexer.State) {
-	return NewSingleMatchTokenRule('=')(r)
+func EqualLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
+	return NewSingleMatchLexemeRule('=')(r)
 }
 
-func ExclamationTokenRule(r rune) (textlexer.Rule, textlexer.State) {
-	return NewSingleMatchTokenRule('!')(r)
+func ExclamationLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
+	return NewSingleMatchLexemeRule('!')(r)
 }
 
-func PipeTokenRule(r rune) (textlexer.Rule, textlexer.State) {
-	return NewSingleMatchTokenRule('|')(r)
+func PipeLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
+	return NewSingleMatchLexemeRule('|')(r)
 }
 
-func AmpersandTokenRule(r rune) (textlexer.Rule, textlexer.State) {
-	return NewSingleMatchTokenRule('&')(r)
+func AmpersandLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
+	return NewSingleMatchLexemeRule('&')(r)
 }
 
-func QuestionMarkTokenRule(r rune) (textlexer.Rule, textlexer.State) {
-	return NewSingleMatchTokenRule('?')(r)
+func QuestionMarkLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
+	return NewSingleMatchLexemeRule('?')(r)
+}
+
+func isNumeric(r rune) bool {
+	if r >= '0' && r <= '9' {
+		return true
+	}
+	return false
 }

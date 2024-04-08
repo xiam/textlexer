@@ -26,5 +26,6 @@ func (s State) String() string {
 	case StateContinue:
 		return "CONTINUE"
 	}
+
 	panic("unreachable")
 }

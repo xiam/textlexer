@@ -16,7 +16,7 @@ type inputAndMatchesCase struct {
 	Matches []string
 }
 
-func TestUnsignedIntegerTokenRule(t *testing.T) {
+func TestUnsignedIntegerLexemeRule(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
 			"",
@@ -73,10 +73,10 @@ func TestUnsignedIntegerTokenRule(t *testing.T) {
 			},
 		},
 	}
-	runTestInputAndMatches(t, testCases, rules.UnsignedIntegerTokenRule)
+	runTestInputAndMatches(t, testCases, rules.UnsignedIntegerLexemeRule)
 }
 
-func TestSignedIntegerTokenRule(t *testing.T) {
+func TestSignedIntegerLexemeRule(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
 			"",
@@ -124,10 +124,10 @@ func TestSignedIntegerTokenRule(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, testCases, rules.SignedIntegerTokenRule)
+	runTestInputAndMatches(t, testCases, rules.SignedIntegerLexemeRule)
 }
 
-func TestUnsignedFloatTokenRule(t *testing.T) {
+func TestUnsignedFloatLexemeRule(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
 			"",
@@ -191,10 +191,10 @@ func TestUnsignedFloatTokenRule(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, testCases, rules.UnsignedFloatTokenRule)
+	runTestInputAndMatches(t, testCases, rules.UnsignedFloatLexemeRule)
 }
 
-func TestSignedFloatTokenRule(t *testing.T) {
+func TestSignedFloatLexemeRule(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
 			"",
@@ -226,10 +226,49 @@ func TestSignedFloatTokenRule(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, testCases, rules.SignedFloatTokenRule)
+	runTestInputAndMatches(t, testCases, rules.SignedFloatLexemeRule)
 }
 
-func TestWhitespaceTokenRule(t *testing.T) {
+func TestNumericLexemeRule(t *testing.T) {
+	testCases := []inputAndMatchesCase{
+		{
+			"",
+			nil,
+		},
+		{
+			"1",
+			[]string{"1"},
+		},
+		{
+			"1.23",
+			[]string{"1.23"},
+		},
+		{
+			"  1 . 23. 21.0",
+			[]string{"1", "23.", "21.0"},
+		},
+		{
+			"1.23.45",
+			[]string{"1.23", ".45"},
+		},
+		{
+			"+1.23.45",
+			[]string{"+1.23", ".45"},
+		},
+		{
+			"-1.23+    .45",
+			[]string{"-1.23", "+.45"},
+		},
+		{
+			"-   1.23",
+			[]string{"-1.23"},
+		},
+	}
+
+	runTestInputAndMatches(t, testCases, rules.NumericLexemeRule)
+}
+
+func TestWhitespaceLexemeRule(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
 			"",
@@ -257,10 +296,10 @@ func TestWhitespaceTokenRule(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, testCases, rules.WhitespaceTokenRule)
+	runTestInputAndMatches(t, testCases, rules.WhitespaceLexemeRule)
 }
 
-func TestInvertTokenRule(t *testing.T) {
+func TestInvertLexemeRule(t *testing.T) {
 	t.Run("invert whitespace", func(t *testing.T) {
 		testCases := []inputAndMatchesCase{
 			{
@@ -285,9 +324,9 @@ func TestInvertTokenRule(t *testing.T) {
 			},
 		}
 
-		invertTokenRule := rules.InvertTokenRule(rules.WhitespaceTokenRule)
+		invertLexemeRule := rules.InvertLexemeRule(rules.WhitespaceLexemeRule)
 
-		runTestInputAndMatches(t, testCases, invertTokenRule)
+		runTestInputAndMatches(t, testCases, invertLexemeRule)
 	})
 
 	t.Run("invert signed integer", func(t *testing.T) {
@@ -315,9 +354,9 @@ func TestInvertTokenRule(t *testing.T) {
 			},
 		}
 
-		invertTokenRule := rules.InvertTokenRule(rules.SignedIntegerTokenRule)
+		invertLexemeRule := rules.InvertLexemeRule(rules.SignedIntegerLexemeRule)
 
-		runTestInputAndMatches(t, testCases, invertTokenRule)
+		runTestInputAndMatches(t, testCases, invertLexemeRule)
 	})
 
 	t.Run("invert signed float", func(t *testing.T) {
@@ -384,9 +423,9 @@ func TestInvertTokenRule(t *testing.T) {
 			},
 		}
 
-		invertTokenRule := rules.InvertTokenRule(rules.SignedFloatTokenRule)
+		invertLexemeRule := rules.InvertLexemeRule(rules.SignedFloatLexemeRule)
 
-		runTestInputAndMatches(t, testCases, invertTokenRule)
+		runTestInputAndMatches(t, testCases, invertLexemeRule)
 	})
 
 	t.Run("invert literal match", func(t *testing.T) {
@@ -429,9 +468,9 @@ func TestInvertTokenRule(t *testing.T) {
 			},
 		}
 
-		invertTokenRule := rules.InvertTokenRule(rules.NewLiteralMatchTokenRule("abc"))
+		invertLexemeRule := rules.InvertLexemeRule(rules.NewLiteralMatchLexemeRule("abc"))
 
-		runTestInputAndMatches(t, testCases, invertTokenRule)
+		runTestInputAndMatches(t, testCases, invertLexemeRule)
 	})
 
 	t.Run("invert caseless literal match", func(t *testing.T) {
@@ -470,9 +509,9 @@ func TestInvertTokenRule(t *testing.T) {
 			},
 		}
 
-		invertTokenRule := rules.InvertTokenRule(rules.NewCaseInsensitiveLiteralMatchTokenRule("abc"))
+		invertLexemeRule := rules.InvertLexemeRule(rules.NewCaseInsensitiveLiteralMatchLexemeRule("abc"))
 
-		runTestInputAndMatches(t, testCases, invertTokenRule)
+		runTestInputAndMatches(t, testCases, invertLexemeRule)
 	})
 
 	t.Run("invert inverted signed float", func(t *testing.T) {
@@ -507,13 +546,13 @@ func TestInvertTokenRule(t *testing.T) {
 			},
 		}
 
-		invertTokenRule := rules.InvertTokenRule(rules.InvertTokenRule(rules.SignedFloatTokenRule))
+		invertLexemeRule := rules.InvertLexemeRule(rules.InvertLexemeRule(rules.SignedFloatLexemeRule))
 
-		runTestInputAndMatches(t, testCases, invertTokenRule)
+		runTestInputAndMatches(t, testCases, invertLexemeRule)
 	})
 }
 
-func TestWordTokenRule(t *testing.T) {
+func TestWordLexemeRule(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
 			"hello world",
@@ -541,10 +580,10 @@ func TestWordTokenRule(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, testCases, rules.WordTokenRule)
+	runTestInputAndMatches(t, testCases, rules.WordLexemeRule)
 }
 
-func TestDoubleQuotedStringTokenRule(t *testing.T) {
+func TestDoubleQuotedStringLexemeRule(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
 			``,
@@ -576,10 +615,10 @@ func TestDoubleQuotedStringTokenRule(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, testCases, rules.DoubleQuotedStringTokenRule)
+	runTestInputAndMatches(t, testCases, rules.DoubleQuotedStringLexemeRule)
 }
 
-func TestSingleQuotedStringTokenRule(t *testing.T) {
+func TestSingleQuotedStringLexemeRule(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
 			``,
@@ -611,10 +650,10 @@ func TestSingleQuotedStringTokenRule(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, testCases, rules.SingleQuotedStringTokenRule)
+	runTestInputAndMatches(t, testCases, rules.SingleQuotedStringLexemeRule)
 }
 
-func TestDoubleQuotedFormattedStringTokenRule(t *testing.T) {
+func TestDoubleQuotedFormattedStringLexemeRule(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
 			``,
@@ -634,10 +673,10 @@ func TestDoubleQuotedFormattedStringTokenRule(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, testCases, rules.DoubleQuotedFormattedStringTokenRule)
+	runTestInputAndMatches(t, testCases, rules.DoubleQuotedFormattedStringLexemeRule)
 }
 
-func TestInlineCommentTokenRule(t *testing.T) {
+func TestInlineCommentLexemeRule(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
 			"",
@@ -669,10 +708,10 @@ func TestInlineCommentTokenRule(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, testCases, rules.InlineCommentTokenRule)
+	runTestInputAndMatches(t, testCases, rules.InlineCommentLexemeRule)
 }
 
-func TestSlashStarCommentTokenRule(t *testing.T) {
+func TestSlashStarCommentLexemeRule(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
 			"",
@@ -704,10 +743,10 @@ func TestSlashStarCommentTokenRule(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, testCases, rules.SlashStarCommentTokenRule)
+	runTestInputAndMatches(t, testCases, rules.SlashStarCommentLexemeRule)
 }
 
-func TestLiteralMatchTokenRule(t *testing.T) {
+func TestLiteralMatchLexemeRule(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
 			"",
@@ -743,12 +782,12 @@ func TestLiteralMatchTokenRule(t *testing.T) {
 		},
 	}
 
-	matchDefKeywordTokenRule := rules.NewLiteralMatchTokenRule("abc")
+	matchDefKeywordLexemeRule := rules.NewLiteralMatchLexemeRule("abc")
 
-	runTestInputAndMatches(t, testCases, matchDefKeywordTokenRule)
+	runTestInputAndMatches(t, testCases, matchDefKeywordLexemeRule)
 }
 
-func TestCaseInsensitiveLiteralMatchTokenRule(t *testing.T) {
+func TestCaseInsensitiveLiteralMatchLexemeRule(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
 			"",
@@ -780,9 +819,9 @@ func TestCaseInsensitiveLiteralMatchTokenRule(t *testing.T) {
 		},
 	}
 
-	matchDefKeywordTokenRule := rules.NewCaseInsensitiveLiteralMatchTokenRule("abc")
+	matchDefKeywordLexemeRule := rules.NewCaseInsensitiveLiteralMatchLexemeRule("abc")
 
-	runTestInputAndMatches(t, testCases, matchDefKeywordTokenRule)
+	runTestInputAndMatches(t, testCases, matchDefKeywordLexemeRule)
 }
 
 func TestAlways(t *testing.T) {
@@ -860,7 +899,7 @@ func TestAlways(t *testing.T) {
 			},
 		}
 
-		runTestInputAndMatches(t, testCases, rules.InvertTokenRule(rules.AlwaysReject))
+		runTestInputAndMatches(t, testCases, rules.InvertLexemeRule(rules.AlwaysReject))
 	})
 
 	t.Run("invert continue", func(t *testing.T) {
@@ -879,7 +918,7 @@ func TestAlways(t *testing.T) {
 			},
 		}
 
-		runTestInputAndMatches(t, testCases, rules.InvertTokenRule(rules.AlwaysContinue))
+		runTestInputAndMatches(t, testCases, rules.InvertLexemeRule(rules.AlwaysContinue))
 	})
 
 	t.Run("invert accept", func(t *testing.T) {
@@ -898,11 +937,11 @@ func TestAlways(t *testing.T) {
 			},
 		}
 
-		runTestInputAndMatches(t, testCases, rules.InvertTokenRule(rules.AlwaysAccept))
+		runTestInputAndMatches(t, testCases, rules.InvertLexemeRule(rules.AlwaysAccept))
 	})
 }
 
-func TestComposeTokensRule(t *testing.T) {
+func TestComposeLexemesRule(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
 			"",
@@ -922,13 +961,13 @@ func TestComposeTokensRule(t *testing.T) {
 		},
 	}
 
-	orderByTokenRule := rules.ComposeTokenRules(
-		rules.NewCaseInsensitiveLiteralMatchTokenRule("ORDER"),
-		rules.WhitespaceTokenRule,
-		rules.NewCaseInsensitiveLiteralMatchTokenRule("BY"),
+	orderByLexemeRule := rules.ComposeLexemeRules(
+		rules.NewCaseInsensitiveLiteralMatchLexemeRule("ORDER"),
+		rules.WhitespaceLexemeRule,
+		rules.NewCaseInsensitiveLiteralMatchLexemeRule("BY"),
 	)
 
-	runTestInputAndMatches(t, testCases, orderByTokenRule)
+	runTestInputAndMatches(t, testCases, orderByLexemeRule)
 }
 
 func TestAnyMatch(t *testing.T) {
@@ -947,14 +986,14 @@ func TestAnyMatch(t *testing.T) {
 		},
 	}
 
-	anyMatchTokenRule := rules.NewMatchAnyOf(
-		rules.NewCaseInsensitiveLiteralMatchTokenRule("ABCDEF"), // will never match
-		rules.NewCaseInsensitiveLiteralMatchTokenRule("ABC"),
-		rules.NewCaseInsensitiveLiteralMatchTokenRule("DEF"),
-		rules.NewCaseInsensitiveLiteralMatchTokenRule("GHI"),
+	anyMatchLexemeRule := rules.NewMatchAnyOf(
+		rules.NewCaseInsensitiveLiteralMatchLexemeRule("ABCDEF"), // will never match
+		rules.NewCaseInsensitiveLiteralMatchLexemeRule("ABC"),
+		rules.NewCaseInsensitiveLiteralMatchLexemeRule("DEF"),
+		rules.NewCaseInsensitiveLiteralMatchLexemeRule("GHI"),
 	)
 
-	runTestInputAndMatches(t, testCases, anyMatchTokenRule)
+	runTestInputAndMatches(t, testCases, anyMatchLexemeRule)
 }
 
 func runTestInputAndMatches(t *testing.T, testCases []inputAndMatchesCase, initialRule textlexer.Rule) {
