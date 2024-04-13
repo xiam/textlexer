@@ -47,11 +47,11 @@ func WhitespaceDelimiterRule(r rune) (textlexer.Rule, textlexer.State) {
 }
 
 func SignedIntegerLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
-	var discardWhitespace textlexer.Rule
+	var skipWhitespace textlexer.Rule
 
-	discardWhitespace = func(r rune) (textlexer.Rule, textlexer.State) {
+	skipWhitespace = func(r rune) (textlexer.Rule, textlexer.State) {
 		if unicode.IsSpace(r) {
-			return discardWhitespace, textlexer.StateReject
+			return skipWhitespace, textlexer.StateReject
 		}
 
 		return UnsignedIntegerLexemeRule(r)
@@ -60,7 +60,7 @@ func SignedIntegerLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
 	// a signed integer may start with a minus or plus sign
 	if r == '-' || r == '+' {
 		// discard whitespace after the sign
-		return discardWhitespace, textlexer.StateContinue
+		return skipWhitespace, textlexer.StateContinue
 	}
 
 	return UnsignedIntegerLexemeRule(r)
@@ -232,7 +232,7 @@ func NewCaseInsensitiveLiteralMatchLexemeRule(match string) func(r rune) (textle
 }
 
 func NumericLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
-	var discardWhitespace, expectInteger, scanInteger, expectDecimal, scanDecimal textlexer.Rule
+	var skipWhitespace, expectInteger, scanInteger, expectDecimal, scanDecimal textlexer.Rule
 
 	scanDecimal = func(r rune) (textlexer.Rule, textlexer.State) {
 		if isNumeric(r) {
@@ -274,34 +274,34 @@ func NumericLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
 		return nil, textlexer.StateReject
 	}
 
-	discardWhitespace = func(r rune) (textlexer.Rule, textlexer.State) {
+	skipWhitespace = func(r rune) (textlexer.Rule, textlexer.State) {
 		if unicode.IsSpace(r) {
-			return discardWhitespace, textlexer.StateReject
+			return skipWhitespace, textlexer.StateContinue
 		}
 
 		return expectInteger(r)
 	}
 
 	if r == '-' || r == '+' {
-		return discardWhitespace, textlexer.StateContinue
+		return skipWhitespace, textlexer.StateContinue
 	}
 
 	return expectInteger(r)
 }
 
 func SignedFloatLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
-	var discardWhitespace textlexer.Rule
+	var skipWhitespace textlexer.Rule
 
-	discardWhitespace = func(r rune) (textlexer.Rule, textlexer.State) {
+	skipWhitespace = func(r rune) (textlexer.Rule, textlexer.State) {
 		if unicode.IsSpace(r) {
-			return discardWhitespace, textlexer.StateReject
+			return skipWhitespace, textlexer.StateReject
 		}
 
 		return UnsignedFloatLexemeRule(r)
 	}
 
 	if r == '-' || r == '+' {
-		return discardWhitespace, textlexer.StateContinue
+		return skipWhitespace, textlexer.StateContinue
 	}
 
 	return UnsignedFloatLexemeRule(r)

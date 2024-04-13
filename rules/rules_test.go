@@ -260,6 +260,10 @@ func TestNumericLexemeRule(t *testing.T) {
 			[]string{"-1.23", "+.45"},
 		},
 		{
+			" -   1 ",
+			[]string{"-1"},
+		},
+		{
 			"-   1.23",
 			[]string{"-1.23"},
 		},

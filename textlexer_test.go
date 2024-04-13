@@ -70,6 +70,54 @@ func TestNumericAndWhitespace(t *testing.T) {
 	assert.True(t, seen[whitespaceRule])
 }
 
+func TestNumericAndMathOperators(t *testing.T) {
+	const (
+		numericRule      = textlexer.LexemeType("NUMERIC")
+		mathOperatorRule = textlexer.LexemeType("MATH-OPERATOR")
+	)
+
+	in := `-1.23+-12++2-6+7.45*4/-2`
+
+	out := []struct {
+		Type textlexer.LexemeType
+		Text string
+	}{
+		{numericRule, "-1.23"},
+		{mathOperatorRule, "+"},
+		{numericRule, "-12"},
+		{mathOperatorRule, "+"},
+		{numericRule, "+2"},
+		{numericRule, "-6"},
+		{numericRule, "+7.45"},
+		{mathOperatorRule, "*"},
+		{numericRule, "4"},
+		{mathOperatorRule, "/"},
+		{numericRule, "-2"},
+	}
+
+	lx := textlexer.New(strings.NewReader(in))
+
+	lx.MustAddRule(numericRule, rules.NumericLexemeRule)
+	lx.MustAddRule(mathOperatorRule, rules.BasicMathOperatorLexemeRule)
+
+	matches := 0
+	for {
+		lex, err := lx.Next()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			require.NoError(t, err)
+		}
+
+		assert.Equal(t, out[matches].Type, lex.Type)
+		assert.Equal(t, out[matches].Text, lex.Text())
+
+		matches++
+	}
+
+}
+
 func TestSQL(t *testing.T) {
 	t.Run("statement 1", func(t *testing.T) {
 		const (
