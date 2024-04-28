@@ -256,20 +256,63 @@ func TestNumericLexemeRule(t *testing.T) {
 			[]string{"+1.23", ".45"},
 		},
 		{
-			"-1.23+    .45",
-			[]string{"-1.23", "+.45"},
+			"-1.23+ \t.45",
+			[]string{"-1.23", "+ \t.45"},
 		},
 		{
 			" -   1 ",
-			[]string{"-1"},
+			[]string{"-   1"},
 		},
 		{
 			"-   1.23",
-			[]string{"-1.23"},
+			[]string{"-   1.23"},
 		},
 	}
 
 	runTestInputAndMatches(t, testCases, rules.NumericLexemeRule)
+}
+
+func TestUnsignedNumericLexemeRule(t *testing.T) {
+	testCases := []inputAndMatchesCase{
+		{
+			"",
+			nil,
+		},
+		{
+			"1",
+			[]string{"1"},
+		},
+		{
+			"1.23",
+			[]string{"1.23"},
+		},
+		{
+			"  1 . 23. 21.0",
+			[]string{"1", "23.", "21.0"},
+		},
+		{
+			"1.23.45",
+			[]string{"1.23", ".45"},
+		},
+		{
+			"1.23.45",
+			[]string{"1.23", ".45"},
+		},
+		{
+			"1.23+    .45",
+			[]string{"1.23", ".45"},
+		},
+		{
+			" -   1 ",
+			[]string{"1"},
+		},
+		{
+			"-   1.23",
+			[]string{"1.23"},
+		},
+	}
+
+	runTestInputAndMatches(t, testCases, rules.UnsignedNumericLexemeRule)
 }
 
 func TestWhitespaceLexemeRule(t *testing.T) {
@@ -1002,7 +1045,7 @@ func TestAnyMatch(t *testing.T) {
 
 func runTestInputAndMatches(t *testing.T, testCases []inputAndMatchesCase, initialRule textlexer.Rule) {
 	for i, tc := range testCases {
-		t.Run(fmt.Sprintf("Test case %03d", i), func(t *testing.T) {
+		t.Run(fmt.Sprintf("case %03d", i), func(t *testing.T) {
 			times := 0
 
 			var state textlexer.State

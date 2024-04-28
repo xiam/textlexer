@@ -1,8 +1,6 @@
 package rules
 
 import (
-	"unicode"
-
 	"github.com/xiam/textlexer"
 )
 
@@ -39,7 +37,7 @@ func UnsignedIntegerLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
 }
 
 func WhitespaceDelimiterRule(r rune) (textlexer.Rule, textlexer.State) {
-	if unicode.IsSpace(r) || textlexer.IsEOF(r) {
+	if isSpace(r) || textlexer.IsEOF(r) {
 		return nil, textlexer.StateAccept
 	}
 
@@ -50,7 +48,7 @@ func SignedIntegerLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
 	var skipWhitespace textlexer.Rule
 
 	skipWhitespace = func(r rune) (textlexer.Rule, textlexer.State) {
-		if unicode.IsSpace(r) {
+		if isSpace(r) {
 			return skipWhitespace, textlexer.StateReject
 		}
 
@@ -219,7 +217,7 @@ func NewCaseInsensitiveLiteralMatchLexemeRule(match string) func(r rune) (textle
 				return nil, textlexer.StateAccept
 			}
 
-			if unicode.ToLower(r) == unicode.ToLower(rune(match[offset])) {
+			if toLower(r) == toLower(rune(match[offset])) {
 				offset++
 				return nextChar, textlexer.StateContinue
 			}
@@ -231,8 +229,8 @@ func NewCaseInsensitiveLiteralMatchLexemeRule(match string) func(r rune) (textle
 	}
 }
 
-func NumericLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
-	var skipWhitespace, expectInteger, scanInteger, expectDecimal, scanDecimal textlexer.Rule
+func UnsignedNumericLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
+	var expectInteger, scanInteger, expectDecimal, scanDecimal textlexer.Rule
 
 	scanDecimal = func(r rune) (textlexer.Rule, textlexer.State) {
 		if isNumeric(r) {
@@ -274,16 +272,62 @@ func NumericLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
 		return nil, textlexer.StateReject
 	}
 
-	skipWhitespace = func(r rune) (textlexer.Rule, textlexer.State) {
-		if unicode.IsSpace(r) {
-			return skipWhitespace, textlexer.StateContinue
+	return expectInteger(r)
+}
+
+func NumericLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
+	var anyWhitespace, expectInteger, scanInteger, expectDecimal, scanDecimal textlexer.Rule
+
+	scanDecimal = func(r rune) (textlexer.Rule, textlexer.State) {
+		if isNumeric(r) {
+			return scanDecimal, textlexer.StateContinue
+		}
+
+		return nil, textlexer.StateAccept
+	}
+
+	scanInteger = func(r rune) (textlexer.Rule, textlexer.State) {
+		if isNumeric(r) {
+			return scanInteger, textlexer.StateContinue
+		}
+
+		if r == '.' {
+			return scanDecimal, textlexer.StateContinue
+		}
+
+		return nil, textlexer.StateAccept
+	}
+
+	expectDecimal = func(r rune) (textlexer.Rule, textlexer.State) {
+		if isNumeric(r) {
+			return scanDecimal, textlexer.StateContinue
+		}
+
+		return nil, textlexer.StateReject
+	}
+
+	expectInteger = func(r rune) (textlexer.Rule, textlexer.State) {
+		if isNumeric(r) {
+			return scanInteger, textlexer.StateContinue
+		}
+
+		if r == '.' {
+			return expectDecimal, textlexer.StateContinue
+		}
+
+		return nil, textlexer.StateReject
+	}
+
+	anyWhitespace = func(r rune) (textlexer.Rule, textlexer.State) {
+		if isSpace(r) {
+			return anyWhitespace, textlexer.StateContinue
 		}
 
 		return expectInteger(r)
 	}
 
 	if r == '-' || r == '+' {
-		return skipWhitespace, textlexer.StateContinue
+		return anyWhitespace, textlexer.StateContinue
 	}
 
 	return expectInteger(r)
@@ -293,7 +337,7 @@ func SignedFloatLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
 	var skipWhitespace textlexer.Rule
 
 	skipWhitespace = func(r rune) (textlexer.Rule, textlexer.State) {
-		if unicode.IsSpace(r) {
+		if isSpace(r) {
 			return skipWhitespace, textlexer.StateReject
 		}
 
@@ -311,14 +355,14 @@ func WhitespaceLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
 	var nextSpace textlexer.Rule
 
 	nextSpace = func(r rune) (textlexer.Rule, textlexer.State) {
-		if unicode.IsSpace(r) {
+		if isSpace(r) {
 			return nextSpace, textlexer.StateContinue
 		}
 
 		return nil, textlexer.StateAccept
 	}
 
-	if unicode.IsSpace(r) {
+	if isSpace(r) {
 		return nextSpace, textlexer.StateContinue
 	}
 
@@ -330,7 +374,7 @@ func WordLexemeRule(r rune) (next textlexer.Rule, state textlexer.State) {
 
 	nextLetter = func(r rune) (textlexer.Rule, textlexer.State) {
 		// can be followed by more letters or digits
-		if unicode.IsLetter(r) || isNumeric(r) {
+		if isLetter(r) || isNumeric(r) {
 			return nextLetter, textlexer.StateContinue
 		}
 
@@ -339,7 +383,7 @@ func WordLexemeRule(r rune) (next textlexer.Rule, state textlexer.State) {
 	}
 
 	// starts with a letter
-	if unicode.IsLetter(r) {
+	if isLetter(r) {
 		return nextLetter, textlexer.StateContinue
 	}
 
@@ -404,7 +448,7 @@ func DoubleQuotedFormattedStringLexemeRule(r rune) (textlexer.Rule, textlexer.St
 
 		if r == '\\' {
 			return func(r rune) (textlexer.Rule, textlexer.State) {
-				if unicode.IsSpace(r) || textlexer.IsEOF(r) {
+				if isSpace(r) || textlexer.IsEOF(r) {
 					return nil, textlexer.StateReject
 				}
 
@@ -604,6 +648,14 @@ func NewMatchAnyOf(rules ...textlexer.Rule) func(r rune) (textlexer.Rule, textle
 	return matchAnyOf(rules)
 }
 
+func ParenLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
+	if r == '(' || r == ')' {
+		return AcceptLexemeRule, textlexer.StateContinue
+	}
+
+	return nil, textlexer.StateReject
+}
+
 func LParenLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
 	return NewSingleMatchLexemeRule('(')(r)
 }
@@ -690,11 +742,4 @@ func AmpersandLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
 
 func QuestionMarkLexemeRule(r rune) (textlexer.Rule, textlexer.State) {
 	return NewSingleMatchLexemeRule('?')(r)
-}
-
-func isNumeric(r rune) bool {
-	if r >= '0' && r <= '9' {
-		return true
-	}
-	return false
 }
