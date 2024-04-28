@@ -12,13 +12,12 @@ type Reader interface {
 }
 
 type TextLexer struct {
-	mu sync.Mutex
-
 	r Reader
 
 	offset int
 
 	rules    []LexemeType
+	rulesMu  sync.Mutex
 	rulesMap map[LexemeType]Rule
 }
 
@@ -31,12 +30,13 @@ func New(r Reader) *TextLexer {
 }
 
 func (lx *TextLexer) AddRule(lexType LexemeType, lexRule Rule) error {
-	lx.mu.Lock()
-	defer lx.mu.Unlock()
+	lx.rulesMu.Lock()
+	defer lx.rulesMu.Unlock()
 
 	if _, ok := lx.rulesMap[lexType]; ok {
-		return fmt.Errorf("rule for %q already exists", lexType)
+		return fmt.Errorf("rule %q already exists", lexType)
 	}
+
 	lx.rulesMap[lexType] = lexRule
 	lx.rules = append(lx.rules, lexType)
 	return nil
@@ -49,13 +49,13 @@ func (lx *TextLexer) MustAddRule(lexType LexemeType, lexRule Rule) {
 }
 
 func (lx *TextLexer) Next() (*Lexeme, error) {
-	lx.mu.Lock()
-	defer lx.mu.Unlock()
-
 	scanners := map[LexemeType]Rule{}
+
+	lx.rulesMu.Lock()
 	for _, lexType := range lx.rules {
 		scanners[lexType] = lx.rulesMap[lexType]
 	}
+	lx.rulesMu.Unlock()
 
 	var lastLexeme *Lexeme
 	var isEOF bool

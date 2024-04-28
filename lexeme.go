@@ -1,9 +1,5 @@
 package textlexer
 
-import (
-	"fmt"
-)
-
 type LexemeType string
 
 const LexemeTypeUnknown LexemeType = "UNKNOWN"
@@ -13,10 +9,6 @@ type Lexeme struct {
 
 	text   []rune
 	offset int
-}
-
-func (t *Lexeme) String() string {
-	return fmt.Sprintf("(%s %q)", t.Type, string(t.text))
 }
 
 func (t *Lexeme) Text() string {

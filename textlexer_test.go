@@ -17,9 +17,9 @@ import (
 
 func TestNumericAndWhitespace(t *testing.T) {
 	const (
-		integerRule    = textlexer.LexemeType("INT")
-		floatRule      = textlexer.LexemeType("FLOAT")
-		whitespaceRule = textlexer.LexemeType("WHITESPACE")
+		lexTypeInteger    = textlexer.LexemeType("INT")
+		lexTypeFloat      = textlexer.LexemeType("FLOAT")
+		lexTypeWhitespace = textlexer.LexemeType("WHITESPACE")
 	)
 
 	in := " 12.3  \t   4 5.6 \t 7\n 8 9.0"
@@ -28,25 +28,25 @@ func TestNumericAndWhitespace(t *testing.T) {
 		Type textlexer.LexemeType
 		Text string
 	}{
-		{whitespaceRule, " "},
-		{floatRule, "12.3"},
-		{whitespaceRule, "  \t   "},
-		{integerRule, "4"},
-		{whitespaceRule, " "},
-		{floatRule, "5.6"},
-		{whitespaceRule, " \t "},
-		{integerRule, "7"},
-		{whitespaceRule, "\n "},
-		{integerRule, "8"},
-		{whitespaceRule, " "},
-		{floatRule, "9.0"},
+		{lexTypeWhitespace, " "},
+		{lexTypeFloat, "12.3"},
+		{lexTypeWhitespace, "  \t   "},
+		{lexTypeInteger, "4"},
+		{lexTypeWhitespace, " "},
+		{lexTypeFloat, "5.6"},
+		{lexTypeWhitespace, " \t "},
+		{lexTypeInteger, "7"},
+		{lexTypeWhitespace, "\n "},
+		{lexTypeInteger, "8"},
+		{lexTypeWhitespace, " "},
+		{lexTypeFloat, "9.0"},
 	}
 
 	lx := textlexer.New(strings.NewReader(in))
 
-	lx.MustAddRule(whitespaceRule, rules.WhitespaceLexemeRule)
-	lx.MustAddRule(floatRule, rules.UnsignedFloatLexemeRule)
-	lx.MustAddRule(integerRule, rules.UnsignedIntegerLexemeRule)
+	lx.MustAddRule(lexTypeWhitespace, rules.Whitespace)
+	lx.MustAddRule(lexTypeFloat, rules.UnsignedFloat)
+	lx.MustAddRule(lexTypeInteger, rules.UnsignedInteger)
 
 	seen := map[textlexer.LexemeType]bool{}
 
@@ -65,68 +65,116 @@ func TestNumericAndWhitespace(t *testing.T) {
 		seen[lex.Type] = true
 	}
 
-	assert.True(t, seen[integerRule])
-	assert.True(t, seen[floatRule])
-	assert.True(t, seen[whitespaceRule])
+	assert.True(t, seen[lexTypeInteger])
+	assert.True(t, seen[lexTypeFloat])
+	assert.True(t, seen[lexTypeWhitespace])
 }
 
 func TestNumericAndMathOperators(t *testing.T) {
-	const (
-		numericRule      = textlexer.LexemeType("NUMERIC")
-		mathOperatorRule = textlexer.LexemeType("MATH-OPERATOR")
-	)
+	t.Run("basic math operators", func(t *testing.T) {
+		const (
+			lexTypeNumeric = textlexer.LexemeType("NUMERIC")
+			lexTypeMathOp  = textlexer.LexemeType("MATH-OPERATOR")
+		)
 
-	in := `-1.23+-12++2-6+7.45*4/-2`
+		in := `-1.23+-12++2-6+7.45*4/-2+3.33`
 
-	out := []struct {
-		Type textlexer.LexemeType
-		Text string
-	}{
-		{numericRule, "-1.23"},
-		{mathOperatorRule, "+"},
-		{numericRule, "-12"},
-		{mathOperatorRule, "+"},
-		{numericRule, "+2"},
-		{numericRule, "-6"},
-		{numericRule, "+7.45"},
-		{mathOperatorRule, "*"},
-		{numericRule, "4"},
-		{mathOperatorRule, "/"},
-		{numericRule, "-2"},
-	}
-
-	lx := textlexer.New(strings.NewReader(in))
-
-	lx.MustAddRule(numericRule, rules.NumericLexemeRule)
-	lx.MustAddRule(mathOperatorRule, rules.BasicMathOperatorLexemeRule)
-
-	matches := 0
-	for {
-		lex, err := lx.Next()
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			require.NoError(t, err)
+		out := []struct {
+			Type textlexer.LexemeType
+			Text string
+		}{
+			{lexTypeNumeric, "-1.23"},
+			{lexTypeMathOp, "+"},
+			{lexTypeNumeric, "-12"},
+			{lexTypeMathOp, "+"},
+			{lexTypeNumeric, "+2"},
+			{lexTypeNumeric, "-6"},
+			{lexTypeNumeric, "+7.45"},
+			{lexTypeMathOp, "*"},
+			{lexTypeNumeric, "4"},
+			{lexTypeMathOp, "/"},
+			{lexTypeNumeric, "-2"},
+			{lexTypeNumeric, "+3.33"},
 		}
 
-		assert.Equal(t, out[matches].Type, lex.Type)
-		assert.Equal(t, out[matches].Text, lex.Text())
+		lx := textlexer.New(strings.NewReader(in))
 
-		matches++
-	}
+		lx.MustAddRule(lexTypeNumeric, rules.Numeric)
+		lx.MustAddRule(lexTypeMathOp, rules.BasicMathOperator)
 
+		matches := 0
+		for {
+			lex, err := lx.Next()
+			if err != nil {
+				if err == io.EOF {
+					break
+				}
+				require.NoError(t, err)
+			}
+
+			assert.Equal(t, out[matches].Type, lex.Type)
+			assert.Equal(t, out[matches].Text, lex.Text())
+
+			matches++
+		}
+	})
+
+	t.Run("basic math operators and space", func(t *testing.T) {
+		const (
+			lexTypeNumeric    = textlexer.LexemeType("NUMERIC")
+			lexTypeMathOp     = textlexer.LexemeType("MATH-OPERATOR")
+			lexTypeWhitespace = textlexer.LexemeType("WHITE-SPACE")
+		)
+
+		in := `- 1.1 + 2.2 + 3.3 - 4.4`
+
+		out := []struct {
+			Type textlexer.LexemeType
+			Text string
+		}{
+			{lexTypeNumeric, "- 1.1"},
+			{lexTypeNumeric, "+ 2.2"},
+			{lexTypeNumeric, "+ 3.3"},
+			{lexTypeNumeric, "- 4.4"},
+		}
+
+		lx := textlexer.New(strings.NewReader(in))
+
+		lx.MustAddRule(lexTypeNumeric, rules.Numeric)
+		lx.MustAddRule(lexTypeMathOp, rules.BasicMathOperator)
+		lx.MustAddRule(lexTypeWhitespace, rules.Whitespace)
+
+		matches := 0
+		for {
+			lex, err := lx.Next()
+			if err != nil {
+				if err == io.EOF {
+					break
+				}
+				require.NoError(t, err)
+			}
+
+			if lex.Type == lexTypeWhitespace {
+				continue
+			}
+
+			assert.Equal(t, out[matches].Type, lex.Type)
+			assert.Equal(t, out[matches].Text, lex.Text())
+
+			matches++
+		}
+	})
 }
 
 func TestSQL(t *testing.T) {
 	t.Run("statement 1", func(t *testing.T) {
 		const (
-			whiteSpaceLexeme   = textlexer.LexemeType("WHITESPACE")
-			commaLexeme        = textlexer.LexemeType("COMMA")
-			semicolonLexeme    = textlexer.LexemeType("SEMICOLON")
-			mathOperatorLexeme = textlexer.LexemeType("MATH-OPERATOR")
-			integerLexeme      = textlexer.LexemeType("INT")
-			wordLexeme         = textlexer.LexemeType("WORD")
+			lexTypeWhitespace = textlexer.LexemeType("WHITESPACE")
+			lexTypeComma      = textlexer.LexemeType("COMMA")
+			lexTypeSemicolon  = textlexer.LexemeType("SEMICOLON")
+			lexTypeMathOp     = textlexer.LexemeType("MATH-OPERATOR")
+			lexTypeInteger    = textlexer.LexemeType("INT")
+			lexTypeWord       = textlexer.LexemeType("WORD")
 		)
 
 		in := `
@@ -141,60 +189,60 @@ func TestSQL(t *testing.T) {
 			Type textlexer.LexemeType
 			Text string
 		}{
-			{whiteSpaceLexeme, "\n\t\t"},
-			{wordLexeme, "SELECT"},
-			{whiteSpaceLexeme, "\n\t\t\t"},
-			{wordLexeme, "id"},
-			{commaLexeme, ","},
-			{whiteSpaceLexeme, " "},
-			{wordLexeme, "book"},
-			{commaLexeme, ","},
-			{whiteSpaceLexeme, " "},
-			{wordLexeme, "major"},
-			{whiteSpaceLexeme, " "},
-			{mathOperatorLexeme, "-"},
-			{whiteSpaceLexeme, " "},
-			{wordLexeme, "fees"},
-			{commaLexeme, ","},
-			{whiteSpaceLexeme, " "},
-			{wordLexeme, "major"},
-			{commaLexeme, ","},
-			{whiteSpaceLexeme, " "},
-			{wordLexeme, "minor"},
-			{commaLexeme, ","},
-			{whiteSpaceLexeme, " "},
-			{wordLexeme, "price"},
-			{commaLexeme, ","},
-			{whiteSpaceLexeme, " "},
-			{wordLexeme, "side"},
-			{whiteSpaceLexeme, "\n\t\t"},
-			{wordLexeme, "FROM"},
-			{whiteSpaceLexeme, " "},
-			{wordLexeme, "trades"},
-			{whiteSpaceLexeme, "\n\t\t"},
-			{wordLexeme, "ORDER"},
-			{whiteSpaceLexeme, " "},
-			{wordLexeme, "BY"},
-			{whiteSpaceLexeme, " "},
-			{wordLexeme, "id"},
-			{whiteSpaceLexeme, " "},
-			{wordLexeme, "DESC"},
-			{whiteSpaceLexeme, "\n\t\t"},
-			{wordLexeme, "LIMIT"},
-			{whiteSpaceLexeme, " "},
-			{integerLexeme, "50"},
-			{semicolonLexeme, ";"},
-			{whiteSpaceLexeme, "\n\t"},
+			{lexTypeWhitespace, "\n\t\t"},
+			{lexTypeWord, "SELECT"},
+			{lexTypeWhitespace, "\n\t\t\t"},
+			{lexTypeWord, "id"},
+			{lexTypeComma, ","},
+			{lexTypeWhitespace, " "},
+			{lexTypeWord, "book"},
+			{lexTypeComma, ","},
+			{lexTypeWhitespace, " "},
+			{lexTypeWord, "major"},
+			{lexTypeWhitespace, " "},
+			{lexTypeMathOp, "-"},
+			{lexTypeWhitespace, " "},
+			{lexTypeWord, "fees"},
+			{lexTypeComma, ","},
+			{lexTypeWhitespace, " "},
+			{lexTypeWord, "major"},
+			{lexTypeComma, ","},
+			{lexTypeWhitespace, " "},
+			{lexTypeWord, "minor"},
+			{lexTypeComma, ","},
+			{lexTypeWhitespace, " "},
+			{lexTypeWord, "price"},
+			{lexTypeComma, ","},
+			{lexTypeWhitespace, " "},
+			{lexTypeWord, "side"},
+			{lexTypeWhitespace, "\n\t\t"},
+			{lexTypeWord, "FROM"},
+			{lexTypeWhitespace, " "},
+			{lexTypeWord, "trades"},
+			{lexTypeWhitespace, "\n\t\t"},
+			{lexTypeWord, "ORDER"},
+			{lexTypeWhitespace, " "},
+			{lexTypeWord, "BY"},
+			{lexTypeWhitespace, " "},
+			{lexTypeWord, "id"},
+			{lexTypeWhitespace, " "},
+			{lexTypeWord, "DESC"},
+			{lexTypeWhitespace, "\n\t\t"},
+			{lexTypeWord, "LIMIT"},
+			{lexTypeWhitespace, " "},
+			{lexTypeInteger, "50"},
+			{lexTypeSemicolon, ";"},
+			{lexTypeWhitespace, "\n\t"},
 		}
 
 		lx := textlexer.New(strings.NewReader(in))
 
-		lx.MustAddRule(whiteSpaceLexeme, rules.WhitespaceLexemeRule)
-		lx.MustAddRule(wordLexeme, rules.WordLexemeRule)
-		lx.MustAddRule(commaLexeme, rules.CommaLexemeRule)
-		lx.MustAddRule(mathOperatorLexeme, rules.BasicMathOperatorLexemeRule)
-		lx.MustAddRule(integerLexeme, rules.SignedIntegerLexemeRule)
-		lx.MustAddRule(semicolonLexeme, rules.SemicolonLexemeRule)
+		lx.MustAddRule(lexTypeWhitespace, rules.Whitespace)
+		lx.MustAddRule(lexTypeWord, rules.Word)
+		lx.MustAddRule(lexTypeComma, rules.Comma)
+		lx.MustAddRule(lexTypeMathOp, rules.BasicMathOperator)
+		lx.MustAddRule(lexTypeInteger, rules.SignedInteger)
+		lx.MustAddRule(lexTypeSemicolon, rules.Semicolon)
 
 		for _, expected := range out {
 			lex, err := lx.Next()
@@ -212,10 +260,10 @@ func TestSQL(t *testing.T) {
 
 	t.Run("statement 2", func(t *testing.T) {
 		const (
-			whiteSpaceLexeme = textlexer.LexemeType("WHITE-SPACE")
-			wordLexeme       = textlexer.LexemeType("WORD")
-			starLexeme       = textlexer.LexemeType("STAR")
-			commentLexeme    = textlexer.LexemeType("COMMENT")
+			lexTypeWhitespace = textlexer.LexemeType("WHITE-SPACE")
+			lexTypeWord       = textlexer.LexemeType("WORD")
+			lexTypeStar       = textlexer.LexemeType("STAR")
+			lexTypeComment    = textlexer.LexemeType("COMMENT")
 		)
 
 		in := "SELECT\n\t* FROM clients AS c /* hello word */ ORDER \n\n\n\t BY id ASC"
@@ -224,35 +272,35 @@ func TestSQL(t *testing.T) {
 			Type textlexer.LexemeType
 			Text string
 		}{
-			{wordLexeme, "SELECT"},
-			{whiteSpaceLexeme, "\n\t"},
-			{starLexeme, "*"},
-			{whiteSpaceLexeme, " "},
-			{wordLexeme, "FROM"},
-			{whiteSpaceLexeme, " "},
-			{wordLexeme, "clients"},
-			{whiteSpaceLexeme, " "},
-			{wordLexeme, "AS"},
-			{whiteSpaceLexeme, " "},
-			{wordLexeme, "c"},
-			{whiteSpaceLexeme, " "},
-			{commentLexeme, "/* hello word */"},
-			{whiteSpaceLexeme, " "},
-			{wordLexeme, "ORDER"},
-			{whiteSpaceLexeme, " \n\n\n\t "},
-			{wordLexeme, "BY"},
-			{whiteSpaceLexeme, " "},
-			{wordLexeme, "id"},
-			{whiteSpaceLexeme, " "},
-			{wordLexeme, "ASC"},
+			{lexTypeWord, "SELECT"},
+			{lexTypeWhitespace, "\n\t"},
+			{lexTypeStar, "*"},
+			{lexTypeWhitespace, " "},
+			{lexTypeWord, "FROM"},
+			{lexTypeWhitespace, " "},
+			{lexTypeWord, "clients"},
+			{lexTypeWhitespace, " "},
+			{lexTypeWord, "AS"},
+			{lexTypeWhitespace, " "},
+			{lexTypeWord, "c"},
+			{lexTypeWhitespace, " "},
+			{lexTypeComment, "/* hello word */"},
+			{lexTypeWhitespace, " "},
+			{lexTypeWord, "ORDER"},
+			{lexTypeWhitespace, " \n\n\n\t "},
+			{lexTypeWord, "BY"},
+			{lexTypeWhitespace, " "},
+			{lexTypeWord, "id"},
+			{lexTypeWhitespace, " "},
+			{lexTypeWord, "ASC"},
 		}
 
 		lx := textlexer.New(strings.NewReader(in))
 
-		lx.MustAddRule(whiteSpaceLexeme, rules.WhitespaceLexemeRule)
-		lx.MustAddRule(wordLexeme, rules.WordLexemeRule)
-		lx.MustAddRule(starLexeme, rules.StarLexemeRule)
-		lx.MustAddRule(commentLexeme, rules.SlashStarCommentLexemeRule)
+		lx.MustAddRule(lexTypeWhitespace, rules.Whitespace)
+		lx.MustAddRule(lexTypeWord, rules.Word)
+		lx.MustAddRule(lexTypeStar, rules.Star)
+		lx.MustAddRule(lexTypeComment, rules.SlashStarComment)
 
 		for _, expected := range out {
 			lex, err := lx.Next()
@@ -272,13 +320,13 @@ func TestSQL(t *testing.T) {
 
 	t.Run("statement 3", func(t *testing.T) {
 		const (
-			whitespaceLexeme = textlexer.LexemeType("WHITE-SPACE")
-			wordLexeme       = textlexer.LexemeType("WORD")
-			reservedWord     = textlexer.LexemeType("RESERVED-WORD")
-			stringLiteral    = textlexer.LexemeType("STRING-LITERAL")
-			starLexeme       = textlexer.LexemeType("STAR")
-			symbolLexeme     = textlexer.LexemeType("SYMBOL")
-			semicolonLexeme  = textlexer.LexemeType("SEMICOLON")
+			lexTypeWhitespace    = textlexer.LexemeType("WHITE-SPACE")
+			lexTypeWord          = textlexer.LexemeType("WORD")
+			lexTypeReservedWord  = textlexer.LexemeType("RESERVED-WORD")
+			lexTypeStringLiteral = textlexer.LexemeType("STRING-LITERAL")
+			lexTypeStar          = textlexer.LexemeType("STAR")
+			lexTypeSymbol        = textlexer.LexemeType("SYMBOL")
+			lexTypeSemicolon     = textlexer.LexemeType("SEMICOLON")
 		)
 
 		in := `
@@ -295,49 +343,49 @@ func TestSQL(t *testing.T) {
 			Type textlexer.LexemeType
 			Text string
 		}{
-			{reservedWord, "SELECT"},
-			{starLexeme, "*"},
-			{reservedWord, "FROM"},
-			{wordLexeme, "clients"},
-			{reservedWord, "AS"},
-			{wordLexeme, "c"},
-			{reservedWord, "WHERE"},
-			{wordLexeme, "name"},
-			{reservedWord, "LIKE"},
-			{stringLiteral, "'%john%'"},
-			{reservedWord, "AND"},
-			{wordLexeme, "birthdate"},
-			{symbolLexeme, ">"},
-			{stringLiteral, "'1990-01-01'"},
-			{reservedWord, "ORDER BY"},
-			{wordLexeme, "id"},
-			{wordLexeme, "ASC"},
-			{semicolonLexeme, ";"},
+			{lexTypeReservedWord, "SELECT"},
+			{lexTypeStar, "*"},
+			{lexTypeReservedWord, "FROM"},
+			{lexTypeWord, "clients"},
+			{lexTypeReservedWord, "AS"},
+			{lexTypeWord, "c"},
+			{lexTypeReservedWord, "WHERE"},
+			{lexTypeWord, "name"},
+			{lexTypeReservedWord, "LIKE"},
+			{lexTypeStringLiteral, "'%john%'"},
+			{lexTypeReservedWord, "AND"},
+			{lexTypeWord, "birthdate"},
+			{lexTypeSymbol, ">"},
+			{lexTypeStringLiteral, "'1990-01-01'"},
+			{lexTypeReservedWord, "ORDER BY"},
+			{lexTypeWord, "id"},
+			{lexTypeWord, "ASC"},
+			{lexTypeSemicolon, ";"},
 		}
 
 		lx := textlexer.New(strings.NewReader(in))
 
-		lx.MustAddRule(whitespaceLexeme, rules.WhitespaceLexemeRule)
-		lx.MustAddRule(wordLexeme, rules.WordLexemeRule)
+		lx.MustAddRule(lexTypeWhitespace, rules.Whitespace)
+		lx.MustAddRule(lexTypeWord, rules.Word)
 
-		lx.MustAddRule(reservedWord, rules.NewMatchAnyOf(
-			rules.NewCaseInsensitiveLiteralMatchLexemeRule("SELECT"),
-			rules.NewCaseInsensitiveLiteralMatchLexemeRule("FROM"),
-			rules.NewCaseInsensitiveLiteralMatchLexemeRule("AS"),
-			rules.NewCaseInsensitiveLiteralMatchLexemeRule("WHERE"),
-			rules.NewCaseInsensitiveLiteralMatchLexemeRule("LIKE"),
-			rules.NewCaseInsensitiveLiteralMatchLexemeRule("AND"),
-			rules.ComposeLexemeRules(
-				rules.NewCaseInsensitiveLiteralMatchLexemeRule("ORDER"),
-				rules.WhitespaceLexemeRule,
-				rules.NewCaseInsensitiveLiteralMatchLexemeRule("BY"),
+		lx.MustAddRule(lexTypeReservedWord, rules.NewMatchAnyOf(
+			rules.NewCaseInsensitiveLiteralMatch("SELECT"),
+			rules.NewCaseInsensitiveLiteralMatch("FROM"),
+			rules.NewCaseInsensitiveLiteralMatch("AS"),
+			rules.NewCaseInsensitiveLiteralMatch("WHERE"),
+			rules.NewCaseInsensitiveLiteralMatch("LIKE"),
+			rules.NewCaseInsensitiveLiteralMatch("AND"),
+			rules.Compose(
+				rules.NewCaseInsensitiveLiteralMatch("ORDER"),
+				rules.Whitespace,
+				rules.NewCaseInsensitiveLiteralMatch("BY"),
 			),
 		))
 
-		lx.MustAddRule(stringLiteral, rules.SingleQuotedStringLexemeRule)
-		lx.MustAddRule(starLexeme, rules.StarLexemeRule)
-		lx.MustAddRule(symbolLexeme, rules.RAngleLexemeRule)
-		lx.MustAddRule(semicolonLexeme, rules.SemicolonLexemeRule)
+		lx.MustAddRule(lexTypeStringLiteral, rules.SingleQuotedString)
+		lx.MustAddRule(lexTypeStar, rules.Star)
+		lx.MustAddRule(lexTypeSymbol, rules.RAngle)
+		lx.MustAddRule(lexTypeSemicolon, rules.Semicolon)
 
 		seen := map[textlexer.LexemeType]bool{}
 
@@ -354,7 +402,7 @@ func TestSQL(t *testing.T) {
 
 			seen[lex.Type] = true
 
-			if lex.Type == whitespaceLexeme {
+			if lex.Type == lexTypeWhitespace {
 				continue
 			}
 
@@ -366,12 +414,12 @@ func TestSQL(t *testing.T) {
 			matches++
 		}
 
-		assert.True(t, seen[reservedWord])
-		assert.True(t, seen[wordLexeme])
-		assert.True(t, seen[stringLiteral])
-		assert.True(t, seen[starLexeme])
-		assert.True(t, seen[symbolLexeme])
-		assert.True(t, seen[semicolonLexeme])
+		assert.True(t, seen[lexTypeReservedWord])
+		assert.True(t, seen[lexTypeWord])
+		assert.True(t, seen[lexTypeStringLiteral])
+		assert.True(t, seen[lexTypeStar])
+		assert.True(t, seen[lexTypeSymbol])
+		assert.True(t, seen[lexTypeSemicolon])
 	})
 }
 
@@ -380,26 +428,26 @@ func TestSpecificCases(t *testing.T) {
 		in := `ABCDEMANL1.23ABDEGHI`
 
 		const (
-			lexemeType1 = textlexer.LexemeType("TYPE-1")
-			lexemeType2 = textlexer.LexemeType("TYPE-2")
-			lexemeType3 = textlexer.LexemeType("TYPE-3")
-			lexemeType4 = textlexer.LexemeType("TYPE-4")
+			lexType1 = textlexer.LexemeType("TYPE-1")
+			lexType2 = textlexer.LexemeType("TYPE-2")
+			lexType3 = textlexer.LexemeType("TYPE-3")
+			lexType4 = textlexer.LexemeType("TYPE-4")
 		)
 
 		out := []struct {
 			Type textlexer.LexemeType
 			Text string
 		}{
-			{lexemeType1, "ABC"},
-			{lexemeType4, "GHI"},
+			{lexType1, "ABC"},
+			{lexType4, "GHI"},
 		}
 
 		lx := textlexer.New(strings.NewReader(in))
 
-		lx.MustAddRule(lexemeType1, rules.NewCaseInsensitiveLiteralMatchLexemeRule("ABC"))
-		lx.MustAddRule(lexemeType2, rules.NewCaseInsensitiveLiteralMatchLexemeRule("ABCDEF"))
-		lx.MustAddRule(lexemeType3, rules.NewCaseInsensitiveLiteralMatchLexemeRule("DEF"))
-		lx.MustAddRule(lexemeType4, rules.NewCaseInsensitiveLiteralMatchLexemeRule("GHI"))
+		lx.MustAddRule(lexType1, rules.NewCaseInsensitiveLiteralMatch("ABC"))
+		lx.MustAddRule(lexType2, rules.NewCaseInsensitiveLiteralMatch("ABCDEF"))
+		lx.MustAddRule(lexType3, rules.NewCaseInsensitiveLiteralMatch("DEF"))
+		lx.MustAddRule(lexType4, rules.NewCaseInsensitiveLiteralMatch("GHI"))
 
 		seen := map[textlexer.LexemeType]bool{}
 
@@ -426,8 +474,8 @@ func TestSpecificCases(t *testing.T) {
 			matches++
 		}
 
-		assert.True(t, seen[lexemeType1])
-		assert.True(t, seen[lexemeType4])
+		assert.True(t, seen[lexType1])
+		assert.True(t, seen[lexType4])
 	})
 
 	t.Run("no rules", func(t *testing.T) {
@@ -459,14 +507,14 @@ func TestSpecificCases(t *testing.T) {
 
 	t.Run("only A", func(t *testing.T) {
 		const (
-			lexemeType = textlexer.LexemeType("A")
+			lexType = textlexer.LexemeType("A")
 		)
 
 		in := `2hacgh6bAks3aSklvVVa1aaa`
 
 		lx := textlexer.New(strings.NewReader(in))
 
-		lx.MustAddRule(lexemeType, rules.NewCaseInsensitiveLiteralMatchLexemeRule("a"))
+		lx.MustAddRule(lexType, rules.NewCaseInsensitiveLiteralMatch("a"))
 
 		seen := map[textlexer.LexemeType]bool{}
 
@@ -480,25 +528,25 @@ func TestSpecificCases(t *testing.T) {
 			}
 
 			seen[lex.Type] = true
-			if lex.Type == lexemeType {
+			if lex.Type == lexType {
 				assert.Equal(t, "a", strings.ToLower(lex.Text()))
 			}
 		}
 
-		assert.True(t, seen[lexemeType])
+		assert.True(t, seen[lexType])
 	})
 
 	t.Run("pair of AA", func(t *testing.T) {
 
 		const (
-			lexemeType = textlexer.LexemeType("AA")
+			lexType = textlexer.LexemeType("AA")
 		)
 
 		in := `xxxaxxaxaxaaaaxaxaxaxaaaxaaaaxaaaaaa`
 
 		lx := textlexer.New(strings.NewReader(in))
 
-		lx.MustAddRule(lexemeType, rules.NewCaseInsensitiveLiteralMatchLexemeRule("AA"))
+		lx.MustAddRule(lexType, rules.NewCaseInsensitiveLiteralMatch("AA"))
 
 		seen := map[textlexer.LexemeType]bool{}
 
@@ -512,24 +560,24 @@ func TestSpecificCases(t *testing.T) {
 			}
 
 			seen[lex.Type] = true
-			if lex.Type == lexemeType {
+			if lex.Type == lexType {
 				assert.Equal(t, "aa", strings.ToLower(lex.Text()))
 			}
 		}
 
-		assert.True(t, seen[lexemeType])
+		assert.True(t, seen[lexType])
 	})
 
 	t.Run("always reject", func(t *testing.T) {
 		const (
-			lexemeType = textlexer.LexemeType("TYPE_1")
+			lexType = textlexer.LexemeType("TYPE_1")
 		)
 
 		in := `abcdef`
 
 		lx := textlexer.New(strings.NewReader(in))
 
-		lx.MustAddRule(lexemeType, rules.AlwaysReject)
+		lx.MustAddRule(lexType, rules.AlwaysReject)
 
 		for {
 			lex, err := lx.Next()
@@ -546,14 +594,14 @@ func TestSpecificCases(t *testing.T) {
 
 	t.Run("always accept", func(t *testing.T) {
 		const (
-			lexemeType = textlexer.LexemeType("TYPE_1")
+			lexType = textlexer.LexemeType("TYPE_1")
 		)
 
 		in := `abcdef`
 
 		lx := textlexer.New(strings.NewReader(in))
 
-		lx.MustAddRule(lexemeType, rules.AlwaysAccept)
+		lx.MustAddRule(lexType, rules.AlwaysAccept)
 
 		seen := map[textlexer.LexemeType]bool{}
 
@@ -569,19 +617,19 @@ func TestSpecificCases(t *testing.T) {
 			seen[lex.Type] = true
 		}
 
-		assert.True(t, seen[lexemeType])
+		assert.True(t, seen[lexType])
 	})
 
 	t.Run("always continue", func(t *testing.T) {
 		const (
-			lexemeType = textlexer.LexemeType("TYPE_1")
+			lexType = textlexer.LexemeType("TYPE_1")
 		)
 
 		in := `abcdef`
 
 		lx := textlexer.New(strings.NewReader(in))
 
-		lx.MustAddRule(lexemeType, rules.AlwaysContinue)
+		lx.MustAddRule(lexType, rules.AlwaysContinue)
 
 		for {
 			lex, err := lx.Next()
@@ -599,9 +647,9 @@ func TestSpecificCases(t *testing.T) {
 
 func TestChaosRules(t *testing.T) {
 	const (
-		chaosLexeme1 = textlexer.LexemeType("CHAOS-1")
-		chaosLexeme2 = textlexer.LexemeType("CHAOS-2")
-		chaosLexeme3 = textlexer.LexemeType("CHAOS-3")
+		lexTypeChaos1 = textlexer.LexemeType("CHAOS-1")
+		lexTypeChaos2 = textlexer.LexemeType("CHAOS-2")
+		lexTypeChaos3 = textlexer.LexemeType("CHAOS-3")
 	)
 
 	garbage := func() string {
@@ -638,9 +686,9 @@ func TestChaosRules(t *testing.T) {
 		return nil, textlexer.StateAccept
 	}
 
-	lx.MustAddRule(chaosLexeme1, chaosRule)
-	lx.MustAddRule(chaosLexeme2, chaosRule)
-	lx.MustAddRule(chaosLexeme3, chaosRule)
+	lx.MustAddRule(lexTypeChaos1, chaosRule)
+	lx.MustAddRule(lexTypeChaos2, chaosRule)
+	lx.MustAddRule(lexTypeChaos3, chaosRule)
 
 	seen := map[textlexer.LexemeType]bool{}
 
@@ -656,7 +704,7 @@ func TestChaosRules(t *testing.T) {
 		seen[lex.Type] = true
 	}
 
-	assert.True(t, seen[chaosLexeme1])
-	assert.True(t, seen[chaosLexeme2])
-	assert.True(t, seen[chaosLexeme3])
+	assert.True(t, seen[lexTypeChaos1])
+	assert.True(t, seen[lexTypeChaos2])
+	assert.True(t, seen[lexTypeChaos3])
 }
