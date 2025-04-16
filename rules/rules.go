@@ -1,6 +1,8 @@
 package rules
 
 import (
+	"unicode"
+
 	"github.com/xiam/textlexer"
 )
 
@@ -29,7 +31,7 @@ func UnsignedInteger(r rune) (textlexer.Rule, textlexer.State) {
 
 	nextDigit = func(r rune) (textlexer.Rule, textlexer.State) {
 		// can be followed by more digits
-		if isNumeric(r) {
+		if isASCIIDigit(r) {
 			return nextDigit, textlexer.StateContinue
 		}
 
@@ -37,7 +39,7 @@ func UnsignedInteger(r rune) (textlexer.Rule, textlexer.State) {
 	}
 
 	// starts with a digit
-	if isNumeric(r) {
+	if isASCIIDigit(r) {
 		return nextDigit, textlexer.StateContinue
 	}
 
@@ -45,7 +47,7 @@ func UnsignedInteger(r rune) (textlexer.Rule, textlexer.State) {
 }
 
 func WhitespaceDelimiter(r rune) (textlexer.Rule, textlexer.State) {
-	if isSpace(r) || textlexer.IsEOF(r) {
+	if isCommonWhitespace(r) || textlexer.IsEOF(r) {
 		return nil, textlexer.StateAccept
 	}
 
@@ -56,7 +58,7 @@ func SignedInteger(r rune) (textlexer.Rule, textlexer.State) {
 	var skipWhitespace textlexer.Rule
 
 	skipWhitespace = func(r rune) (textlexer.Rule, textlexer.State) {
-		if isSpace(r) {
+		if isCommonWhitespace(r) {
 			return skipWhitespace, textlexer.StateReject
 		}
 
@@ -76,7 +78,7 @@ func UnsignedFloat(r rune) (textlexer.Rule, textlexer.State) {
 	var integerPart, radixPoint, fractionalPart textlexer.Rule
 
 	integerPart = func(r rune) (textlexer.Rule, textlexer.State) {
-		if isNumeric(r) {
+		if isASCIIDigit(r) {
 			return integerPart, textlexer.StateContinue
 		}
 
@@ -88,7 +90,7 @@ func UnsignedFloat(r rune) (textlexer.Rule, textlexer.State) {
 		if r == '.' {
 			return func(r rune) (textlexer.Rule, textlexer.State) {
 				// expects a digit immediately after the radix point
-				if isNumeric(r) {
+				if isASCIIDigit(r) {
 					return fractionalPart, textlexer.StateContinue
 				}
 
@@ -100,14 +102,14 @@ func UnsignedFloat(r rune) (textlexer.Rule, textlexer.State) {
 	}
 
 	fractionalPart = func(r rune) (textlexer.Rule, textlexer.State) {
-		if isNumeric(r) {
+		if isASCIIDigit(r) {
 			return fractionalPart, textlexer.StateContinue
 		}
 
 		return nil, textlexer.StateAccept
 	}
 
-	if isNumeric(r) {
+	if isASCIIDigit(r) {
 		return integerPart, textlexer.StateContinue
 	}
 
@@ -225,7 +227,7 @@ func NewCaseInsensitiveLiteralMatch(match string) func(r rune) (textlexer.Rule, 
 				return nil, textlexer.StateAccept
 			}
 
-			if toLower(r) == toLower(rune(match[offset])) {
+			if unicode.ToLower(r) == unicode.ToLower(rune(match[offset])) {
 				offset++
 				return nextChar, textlexer.StateContinue
 			}
@@ -241,7 +243,7 @@ func UnsignedNumeric(r rune) (textlexer.Rule, textlexer.State) {
 	var expectInteger, scanInteger, expectDecimal, scanDecimal textlexer.Rule
 
 	scanDecimal = func(r rune) (textlexer.Rule, textlexer.State) {
-		if isNumeric(r) {
+		if isASCIIDigit(r) {
 			return scanDecimal, textlexer.StateContinue
 		}
 
@@ -249,7 +251,7 @@ func UnsignedNumeric(r rune) (textlexer.Rule, textlexer.State) {
 	}
 
 	scanInteger = func(r rune) (textlexer.Rule, textlexer.State) {
-		if isNumeric(r) {
+		if isASCIIDigit(r) {
 			return scanInteger, textlexer.StateContinue
 		}
 
@@ -261,7 +263,7 @@ func UnsignedNumeric(r rune) (textlexer.Rule, textlexer.State) {
 	}
 
 	expectDecimal = func(r rune) (textlexer.Rule, textlexer.State) {
-		if isNumeric(r) {
+		if isASCIIDigit(r) {
 			return scanDecimal, textlexer.StateContinue
 		}
 
@@ -269,7 +271,7 @@ func UnsignedNumeric(r rune) (textlexer.Rule, textlexer.State) {
 	}
 
 	expectInteger = func(r rune) (textlexer.Rule, textlexer.State) {
-		if isNumeric(r) {
+		if isASCIIDigit(r) {
 			return scanInteger, textlexer.StateContinue
 		}
 
@@ -287,7 +289,7 @@ func Numeric(r rune) (textlexer.Rule, textlexer.State) {
 	var anyWhitespace, expectInteger, scanInteger, expectDecimal, scanDecimal textlexer.Rule
 
 	scanDecimal = func(r rune) (textlexer.Rule, textlexer.State) {
-		if isNumeric(r) {
+		if isASCIIDigit(r) {
 			return scanDecimal, textlexer.StateContinue
 		}
 
@@ -295,7 +297,7 @@ func Numeric(r rune) (textlexer.Rule, textlexer.State) {
 	}
 
 	scanInteger = func(r rune) (textlexer.Rule, textlexer.State) {
-		if isNumeric(r) {
+		if isASCIIDigit(r) {
 			return scanInteger, textlexer.StateContinue
 		}
 
@@ -307,7 +309,7 @@ func Numeric(r rune) (textlexer.Rule, textlexer.State) {
 	}
 
 	expectDecimal = func(r rune) (textlexer.Rule, textlexer.State) {
-		if isNumeric(r) {
+		if isASCIIDigit(r) {
 			return scanDecimal, textlexer.StateContinue
 		}
 
@@ -315,7 +317,7 @@ func Numeric(r rune) (textlexer.Rule, textlexer.State) {
 	}
 
 	expectInteger = func(r rune) (textlexer.Rule, textlexer.State) {
-		if isNumeric(r) {
+		if isASCIIDigit(r) {
 			return scanInteger, textlexer.StateContinue
 		}
 
@@ -327,7 +329,7 @@ func Numeric(r rune) (textlexer.Rule, textlexer.State) {
 	}
 
 	anyWhitespace = func(r rune) (textlexer.Rule, textlexer.State) {
-		if isSpace(r) {
+		if isCommonWhitespace(r) {
 			return anyWhitespace, textlexer.StateContinue
 		}
 
@@ -345,7 +347,7 @@ func SignedFloat(r rune) (textlexer.Rule, textlexer.State) {
 	var skipWhitespace textlexer.Rule
 
 	skipWhitespace = func(r rune) (textlexer.Rule, textlexer.State) {
-		if isSpace(r) {
+		if isCommonWhitespace(r) {
 			return skipWhitespace, textlexer.StateReject
 		}
 
@@ -363,14 +365,14 @@ func Whitespace(r rune) (textlexer.Rule, textlexer.State) {
 	var nextSpace textlexer.Rule
 
 	nextSpace = func(r rune) (textlexer.Rule, textlexer.State) {
-		if isSpace(r) {
+		if isCommonWhitespace(r) {
 			return nextSpace, textlexer.StateContinue
 		}
 
 		return nil, textlexer.StateAccept
 	}
 
-	if isSpace(r) {
+	if isCommonWhitespace(r) {
 		return nextSpace, textlexer.StateContinue
 	}
 
@@ -382,7 +384,7 @@ func Word(r rune) (next textlexer.Rule, state textlexer.State) {
 
 	nextLetter = func(r rune) (textlexer.Rule, textlexer.State) {
 		// can be followed by more letters or digits
-		if isLetter(r) || isNumeric(r) {
+		if isASCIILetter(r) || isASCIIDigit(r) {
 			return nextLetter, textlexer.StateContinue
 		}
 
@@ -391,7 +393,7 @@ func Word(r rune) (next textlexer.Rule, state textlexer.State) {
 	}
 
 	// starts with a letter
-	if isLetter(r) {
+	if isASCIILetter(r) {
 		return nextLetter, textlexer.StateContinue
 	}
 
@@ -456,7 +458,7 @@ func DoubleQuotedFormattedString(r rune) (textlexer.Rule, textlexer.State) {
 
 		if r == '\\' {
 			return func(r rune) (textlexer.Rule, textlexer.State) {
-				if isSpace(r) || textlexer.IsEOF(r) {
+				if isCommonWhitespace(r) || textlexer.IsEOF(r) {
 					return nil, textlexer.StateReject
 				}
 

@@ -59,10 +59,10 @@ func TestNumericAndWhitespace(t *testing.T) {
 			require.NoError(t, err)
 		}
 
-		assert.Equal(t, expected.Type, lex.Type)
+		assert.Equal(t, expected.Type, lex.Type())
 		assert.Equal(t, expected.Text, lex.Text())
 
-		seen[lex.Type] = true
+		seen[lex.Type()] = true
 	}
 
 	assert.True(t, seen[lexTypeInteger])
@@ -112,7 +112,7 @@ func TestNumericAndMathOperators(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			assert.Equal(t, out[matches].Type, lex.Type)
+			assert.Equal(t, out[matches].Type, lex.Type())
 			assert.Equal(t, out[matches].Text, lex.Text())
 
 			matches++
@@ -154,11 +154,11 @@ func TestNumericAndMathOperators(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			if lex.Type == lexTypeWhitespace {
+			if lex.Type() == lexTypeWhitespace {
 				continue
 			}
 
-			assert.Equal(t, out[matches].Type, lex.Type)
+			assert.Equal(t, out[matches].Type, lex.Type())
 			assert.Equal(t, out[matches].Text, lex.Text())
 
 			matches++
@@ -253,7 +253,7 @@ func TestSQL(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			assert.Equal(t, expected.Type, lex.Type)
+			assert.Equal(t, expected.Type, lex.Type())
 			assert.Equal(t, expected.Text, lex.Text())
 		}
 	})
@@ -311,7 +311,7 @@ func TestSQL(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			assert.Equal(t, expected.Type, lex.Type)
+			assert.Equal(t, expected.Type, lex.Type())
 			assert.Equal(t, expected.Text, lex.Text())
 
 			t.Logf("%v", lex)
@@ -400,15 +400,15 @@ func TestSQL(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			seen[lex.Type] = true
+			seen[lex.Type()] = true
 
-			if lex.Type == lexTypeWhitespace {
+			if lex.Type() == lexTypeWhitespace {
 				continue
 			}
 
 			t.Logf("%v", lex)
 
-			assert.Equal(t, out[matches].Type, lex.Type)
+			assert.Equal(t, out[matches].Type, lex.Type())
 			assert.Equal(t, out[matches].Text, lex.Text())
 
 			matches++
@@ -462,13 +462,13 @@ func TestSpecificCases(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			seen[lex.Type] = true
+			seen[lex.Type()] = true
 
-			if lex.Type == textlexer.LexemeTypeUnknown {
+			if lex.Type() == textlexer.LexemeTypeUnknown {
 				continue
 			}
 
-			assert.Equal(t, out[matches].Type, lex.Type)
+			assert.Equal(t, out[matches].Type, lex.Type())
 			assert.Equal(t, out[matches].Text, lex.Text())
 
 			matches++
@@ -492,7 +492,7 @@ func TestSpecificCases(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			assert.Equal(t, textlexer.LexemeTypeUnknown, lex.Type)
+			assert.Equal(t, textlexer.LexemeTypeUnknown, lex.Type())
 		}
 	})
 
@@ -527,8 +527,8 @@ func TestSpecificCases(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			seen[lex.Type] = true
-			if lex.Type == lexType {
+			seen[lex.Type()] = true
+			if lex.Type() == lexType {
 				assert.Equal(t, "a", strings.ToLower(lex.Text()))
 			}
 		}
@@ -559,8 +559,8 @@ func TestSpecificCases(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			seen[lex.Type] = true
-			if lex.Type == lexType {
+			seen[lex.Type()] = true
+			if lex.Type() == lexType {
 				assert.Equal(t, "aa", strings.ToLower(lex.Text()))
 			}
 		}
@@ -588,7 +588,7 @@ func TestSpecificCases(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			assert.Equal(t, textlexer.LexemeTypeUnknown, lex.Type)
+			assert.Equal(t, textlexer.LexemeTypeUnknown, lex.Type())
 		}
 	})
 
@@ -614,7 +614,7 @@ func TestSpecificCases(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			seen[lex.Type] = true
+			seen[lex.Type()] = true
 		}
 
 		assert.True(t, seen[lexType])
@@ -640,7 +640,7 @@ func TestSpecificCases(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			assert.Equal(t, textlexer.LexemeTypeUnknown, lex.Type)
+			assert.Equal(t, textlexer.LexemeTypeUnknown, lex.Type())
 		}
 	})
 }
@@ -701,7 +701,7 @@ func TestChaosRules(t *testing.T) {
 			require.NoError(t, err)
 		}
 
-		seen[lex.Type] = true
+		seen[lex.Type()] = true
 	}
 
 	assert.True(t, seen[lexTypeChaos1])

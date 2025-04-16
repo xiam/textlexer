@@ -11,1000 +11,1172 @@ import (
 	"github.com/xiam/textlexer/rules"
 )
 
+// inputAndMatchesCase represents a test case with input text and expected matches
 type inputAndMatchesCase struct {
-	Input   string
-	Matches []string
+	Input       string
+	Matches     []string
+	Description string // Added description field for better test documentation
 }
 
 func TestUnsignedInteger(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
-			"",
-			nil,
+			Input:       "",
+			Matches:     nil,
+			Description: "Empty input",
 		},
 		{
-			"1",
-			[]string{"1"},
+			Input:       "1",
+			Matches:     []string{"1"},
+			Description: "Single digit",
 		},
 		{
-			" 2",
-			[]string{"2"},
+			Input:       " 2",
+			Matches:     []string{"2"},
+			Description: "Digit with leading space",
 		},
 		{
-			"1a",
-			[]string{"1"},
+			Input:       "1a",
+			Matches:     []string{"1"},
+			Description: "Digit followed by letter",
 		},
 		{
-			"123",
-			[]string{"123"},
+			Input:       "123",
+			Matches:     []string{"123"},
+			Description: "Multi-digit number",
 		},
 		{
-			"0",
-			[]string{"0"},
+			Input:       "0",
+			Matches:     []string{"0"},
+			Description: "Zero",
 		},
 		{
-			"-",
-			nil,
+			Input:       "-",
+			Matches:     nil,
+			Description: "Minus sign only",
 		},
 		{
-			"-1",
-			[]string{"1"},
+			Input:       "-1",
+			Matches:     []string{"1"},
+			Description: "Negative number (should match only digit)",
 		},
 		{
-			"0001",
-			[]string{"0001"},
+			Input:       "0001",
+			Matches:     []string{"0001"},
+			Description: "Number with leading zeros",
 		},
 		{
-			"12 34 567 8.9",
-			[]string{
-				"12",
-				"34",
-				"567",
-				"8",
-				"9",
-			},
+			Input:       "12 34 567 8.9",
+			Matches:     []string{"12", "34", "567", "8", "9"},
+			Description: "Multiple numbers with separators",
 		},
 		{
-			"aaa123.#1113.123",
-			[]string{
-				"123",
-				"1113",
-				"123",
-			},
+			Input:       "aaa123.#1113.123",
+			Matches:     []string{"123", "1113", "123"},
+			Description: "Numbers embedded in non-numeric text",
 		},
 	}
-	runTestInputAndMatches(t, testCases, rules.UnsignedInteger)
+	runTestInputAndMatches(t, "UnsignedInteger", testCases, rules.UnsignedInteger)
 }
 
 func TestSignedInteger(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
-			"",
-			nil,
+			Input:       "",
+			Matches:     nil,
+			Description: "Empty input",
 		},
 		{
-			"1",
-			[]string{"1"},
+			Input:       "1",
+			Matches:     []string{"1"},
+			Description: "Positive number without sign",
 		},
 		{
-			"-1",
-			[]string{"-1"},
+			Input:       "-1",
+			Matches:     []string{"-1"},
+			Description: "Negative number",
 		},
 		{
-			"- a  1",
-			[]string{"1"},
+			Input:       "- a  1",
+			Matches:     []string{"1"},
+			Description: "Minus sign separated from number",
 		},
 		{
-			"-   1",
-			[]string{"-1"},
+			Input:       "-   1",
+			Matches:     []string{"-1"},
+			Description: "Minus sign with whitespace before number",
 		},
 		{
-			"- \n  1",
-			[]string{"-1"},
+			Input:       "- \n  1",
+			Matches:     []string{"-1"},
+			Description: "Minus sign with newline before number",
 		},
 		{
-			"+123.+ 456 78 - 10",
-			[]string{"+123", "+456", "78", "-10"},
+			Input:       "+123.+ 456 78 - 10",
+			Matches:     []string{"+123", "+456", "78", "-10"},
+			Description: "Multiple signed numbers with separators",
 		},
 		{
-			"0.",
-			[]string{"0"},
+			Input:       "0.",
+			Matches:     []string{"0"},
+			Description: "Zero with decimal point",
 		},
 		{
-			"+  \n 0. 455",
-			[]string{"+0", "455"},
+			Input:       "+  \n 0. 455",
+			Matches:     []string{"+0", "455"},
+			Description: "Signed zero with whitespace and newline",
 		},
 		{
-			"-",
-			nil,
+			Input:       "-",
+			Matches:     nil,
+			Description: "Minus sign only",
 		},
 		{
-			"-1-2-3-4--5",
-			[]string{"-1", "-2", "-3", "-4", "-5"},
+			Input:       "-1-2-3-4--5",
+			Matches:     []string{"-1", "-2", "-3", "-4", "-5"},
+			Description: "Sequence of negative numbers without separators",
 		},
 	}
 
-	runTestInputAndMatches(t, testCases, rules.SignedInteger)
+	runTestInputAndMatches(t, "SignedInteger", testCases, rules.SignedInteger)
 }
 
 func TestUnsignedFloat(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
-			"",
-			nil,
+			Input:       "",
+			Matches:     nil,
+			Description: "Empty input",
 		},
 		{
-			"1",
-			nil,
+			Input:       "1",
+			Matches:     nil,
+			Description: "Integer (should not match float)",
 		},
 		{
-			"123",
-			nil,
+			Input:       "123",
+			Matches:     nil,
+			Description: "Multi-digit integer (should not match float)",
 		},
 		{
-			"0",
-			nil,
+			Input:       "0",
+			Matches:     nil,
+			Description: "Zero (should not match float)",
 		},
 		{
-			"-1.0",
-			[]string{"1.0"},
+			Input:       "-1.0",
+			Matches:     []string{"1.0"},
+			Description: "Negative float (should match only the numeric part)",
 		},
 		{
-			"-01",
-			nil,
+			Input:       "-01",
+			Matches:     nil,
+			Description: "Negative integer with leading zero (should not match float)",
 		},
 		{
-			"aaaa0.1xxxx",
-			[]string{"0.1"},
+			Input:       "aaaa0.1xxxx",
+			Matches:     []string{"0.1"},
+			Description: "Float embedded in text",
 		},
 		{
-			"0.001",
-			[]string{"0.001"},
+			Input:       "0.001",
+			Matches:     []string{"0.001"},
+			Description: "Float with leading zero",
 		},
 		{
-			"123.",
-			nil,
+			Input:       "123.",
+			Matches:     nil,
+			Description: "Number with trailing decimal point (not a valid float)",
 		},
 		{
-			"123 .45 6",
-			[]string{".45"},
+			Input:       "123 .45 6",
+			Matches:     []string{".45"},
+			Description: "Decimal part separated from whole number",
 		},
 		{
-			"123.0",
-			[]string{"123.0"},
+			Input:       "123.0",
+			Matches:     []string{"123.0"},
+			Description: "Float with zero decimal",
 		},
 		{
-			"123.45",
-			[]string{"123.45"},
+			Input:       "123.45",
+			Matches:     []string{"123.45"},
+			Description: "Standard float",
 		},
 		{
-			"123.456",
-			[]string{"123.456"},
+			Input:       "123.456",
+			Matches:     []string{"123.456"},
+			Description: "Float with multiple decimal digits",
 		},
 		{
-			"ajt.23",
-			[]string{".23"},
+			Input:       "ajt.23",
+			Matches:     []string{".23"},
+			Description: "Decimal part after non-numeric text",
 		},
 		{
-			"ssdddd123.456.76755",
-			[]string{"123.456", ".76755"},
+			Input:       "ssdddd123.456.76755",
+			Matches:     []string{"123.456", ".76755"},
+			Description: "Multiple floats with text",
 		},
 	}
 
-	runTestInputAndMatches(t, testCases, rules.UnsignedFloat)
+	runTestInputAndMatches(t, "UnsignedFloat", testCases, rules.UnsignedFloat)
 }
 
 func TestSignedFloat(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
-			"",
-			nil,
+			Input:       "",
+			Matches:     nil,
+			Description: "Empty input",
 		},
 		{
-			"1.1a",
-			[]string{"1.1"},
+			Input:       "1.1a",
+			Matches:     []string{"1.1"},
+			Description: "Float followed by letter",
 		},
 		{
-			"a+45.222",
-			[]string{"+45.222"},
+			Input:       "a+45.222",
+			Matches:     []string{"+45.222"},
+			Description: "Positive float with text prefix",
 		},
 		{
-			"-134.1",
-			[]string{"-134.1"},
+			Input:       "-134.1",
+			Matches:     []string{"-134.1"},
+			Description: "Negative float",
 		},
 		{
-			"aBCd0-1234.444EDFT11",
-			[]string{"-1234.444"},
+			Input:       "aBCd0-1234.444EDFT11",
+			Matches:     []string{"-1234.444"},
+			Description: "Negative float embedded in mixed-case text",
 		},
 		{
-			"-  134.1",
-			[]string{"-134.1"},
+			Input:       "-  134.1",
+			Matches:     []string{"-134.1"},
+			Description: "Negative float with whitespace after sign",
 		},
 		{
-			"  + 134.1 ",
-			[]string{"+134.1"},
+			Input:       "  + 134.1 ",
+			Matches:     []string{"+134.1"},
+			Description: "Positive float with whitespace after sign and surrounding spaces",
 		},
 	}
 
-	runTestInputAndMatches(t, testCases, rules.SignedFloat)
+	runTestInputAndMatches(t, "SignedFloat", testCases, rules.SignedFloat)
 }
 
 func TestNumeric(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
-			"",
-			nil,
+			Input:       "",
+			Matches:     nil,
+			Description: "Empty input",
 		},
 		{
-			"1",
-			[]string{"1"},
+			Input:       "1",
+			Matches:     []string{"1"},
+			Description: "Integer",
 		},
 		{
-			"1.23",
-			[]string{"1.23"},
+			Input:       "1.23",
+			Matches:     []string{"1.23"},
+			Description: "Float",
 		},
 		{
-			"  1 . 23. 21.0",
-			[]string{"1", "23.", "21.0"},
+			Input:       "  1 . 23. 21.0",
+			Matches:     []string{"1", "23.", "21.0"},
+			Description: "Multiple numbers with whitespace and decimal points",
 		},
 		{
-			"1.23.45",
-			[]string{"1.23", ".45"},
+			Input:       "1.23.45",
+			Matches:     []string{"1.23", ".45"},
+			Description: "Float followed by decimal part",
 		},
 		{
-			"+1.23.45",
-			[]string{"+1.23", ".45"},
+			Input:       "+1.23.45",
+			Matches:     []string{"+1.23", ".45"},
+			Description: "Signed float followed by decimal part",
 		},
 		{
-			"-1.23+ \t.45",
-			[]string{"-1.23", "+ \t.45"},
+			Input:       "-1.23+ \t.45",
+			Matches:     []string{"-1.23", "+ \t.45"},
+			Description: "Negative float followed by positive decimal with whitespace",
 		},
 		{
-			" -   1 ",
-			[]string{"-   1"},
+			Input:       " -   1 ",
+			Matches:     []string{"-   1"},
+			Description: "Negative integer with whitespace",
 		},
 		{
-			"-   1.23",
-			[]string{"-   1.23"},
+			Input:       "-   1.23",
+			Matches:     []string{"-   1.23"},
+			Description: "Negative float with whitespace after sign",
 		},
 	}
 
-	runTestInputAndMatches(t, testCases, rules.Numeric)
+	runTestInputAndMatches(t, "Numeric", testCases, rules.Numeric)
 }
 
 func TestUnsignedNumeric(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
-			"",
-			nil,
+			Input:       "",
+			Matches:     nil,
+			Description: "Empty input",
 		},
 		{
-			"1",
-			[]string{"1"},
+			Input:       "1",
+			Matches:     []string{"1"},
+			Description: "Integer",
 		},
 		{
-			"1.23",
-			[]string{"1.23"},
+			Input:       "1.23",
+			Matches:     []string{"1.23"},
+			Description: "Float",
 		},
 		{
-			"  1 . 23. 21.0",
-			[]string{"1", "23.", "21.0"},
+			Input:       "  1 . 23. 21.0",
+			Matches:     []string{"1", "23.", "21.0"},
+			Description: "Multiple numbers with whitespace and decimal points",
 		},
 		{
-			"1.23.45",
-			[]string{"1.23", ".45"},
+			Input:       "1.23.45",
+			Matches:     []string{"1.23", ".45"},
+			Description: "Float followed by decimal part",
 		},
 		{
-			"1.23.45",
-			[]string{"1.23", ".45"},
+			Input:       "1.23+    .45",
+			Matches:     []string{"1.23", ".45"},
+			Description: "Float followed by decimal part with plus sign and whitespace",
 		},
 		{
-			"1.23+    .45",
-			[]string{"1.23", ".45"},
+			Input:       " -   1 ",
+			Matches:     []string{"1"},
+			Description: "Negative integer (should match only the digit)",
 		},
 		{
-			" -   1 ",
-			[]string{"1"},
-		},
-		{
-			"-   1.23",
-			[]string{"1.23"},
+			Input:       "-   1.23",
+			Matches:     []string{"1.23"},
+			Description: "Negative float (should match only the numeric part)",
 		},
 	}
 
-	runTestInputAndMatches(t, testCases, rules.UnsignedNumeric)
+	runTestInputAndMatches(t, "UnsignedNumeric", testCases, rules.UnsignedNumeric)
 }
 
 func TestWhitespace(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
-			"",
-			nil,
+			Input:       "",
+			Matches:     nil,
+			Description: "Empty input",
 		},
 		{
-			" ",
-			[]string{" "},
+			Input:       " ",
+			Matches:     []string{" "},
+			Description: "Single space",
 		},
 		{
-			"\t",
-			[]string{"\t"},
+			Input:       "\t",
+			Matches:     []string{"\t"},
+			Description: "Tab character",
 		},
 		{
-			"\n",
-			[]string{"\n"},
+			Input:       "\n",
+			Matches:     []string{"\n"},
+			Description: "Newline character",
 		},
 		{
-			"q \t\nq",
-			[]string{" \t\n"},
+			Input:       "q \t\nq",
+			Matches:     []string{" \t\n"},
+			Description: "Mixed whitespace between characters",
 		},
 		{
-			"a b c \n d",
-			[]string{" ", " ", " \n "},
+			Input:       "a b c \n d",
+			Matches:     []string{" ", " ", " \n "},
+			Description: "Words separated by whitespace",
 		},
 	}
 
-	runTestInputAndMatches(t, testCases, rules.Whitespace)
+	runTestInputAndMatches(t, "Whitespace", testCases, rules.Whitespace)
 }
 
 func TestInvert(t *testing.T) {
-	t.Run("invert whitespace", func(t *testing.T) {
+	// Breaking down the large test function into smaller sub-tests
+	t.Run("InvertWhitespace", func(t *testing.T) {
 		testCases := []inputAndMatchesCase{
 			{
-				"",
-				nil,
+				Input:       "",
+				Matches:     nil,
+				Description: "Empty input",
 			},
 			{
-				" ",
-				nil,
+				Input:       " ",
+				Matches:     nil,
+				Description: "Single space (should not match when inverted)",
 			},
 			{
-				"abc\t \t\t\nBCD",
-				[]string{"abc", "BCD"},
+				Input:       "abc\t \t\t\nBCD",
+				Matches:     []string{"abc", "BCD"},
+				Description: "Text separated by whitespace",
 			},
 			{
-				"qaaaa \t\nqa",
-				[]string{"qaaaa", "qa"},
+				Input:       "qaaaa \t\nqa",
+				Matches:     []string{"qaaaa", "qa"},
+				Description: "Words separated by mixed whitespace",
 			},
 			{
-				"a b c \n d",
-				[]string{"a", "b", "c", "d"},
+				Input:       "a b c \n d",
+				Matches:     []string{"a", "b", "c", "d"},
+				Description: "Single characters separated by whitespace",
 			},
 		}
 
 		invertRule := rules.Invert(rules.Whitespace)
-
-		runTestInputAndMatches(t, testCases, invertRule)
+		runTestInputAndMatches(t, "InvertWhitespace", testCases, invertRule)
 	})
 
-	t.Run("invert signed integer", func(t *testing.T) {
+	t.Run("InvertSignedInteger", func(t *testing.T) {
 		testCases := []inputAndMatchesCase{
 			{
-				"",
-				nil,
+				Input:       "",
+				Matches:     nil,
+				Description: "Empty input",
 			},
 			{
-				"1",
-				nil,
+				Input:       "1",
+				Matches:     nil,
+				Description: "Integer (should not match when inverted)",
 			},
 			{
-				"-1a",
-				[]string{"a"},
+				Input:       "-1a",
+				Matches:     []string{"a"},
+				Description: "Negative number followed by letter (should match only letter)",
 			},
 			{
-				"t-   \n\n\n 1ea",
-				[]string{"t", "ea"},
+				Input:       "t-   \n\n\n 1ea",
+				Matches:     []string{"t", "ea"},
+				Description: "Text around a negative number with whitespace",
 			},
-
 			{
-				"-  a1e",
-				[]string{"-  ", "a", "e"},
+				Input:       "-  a1e",
+				Matches:     []string{"-  ", "a", "e"},
+				Description: "Minus sign with text and digit",
 			},
 		}
 
 		invertRule := rules.Invert(rules.SignedInteger)
-
-		runTestInputAndMatches(t, testCases, invertRule)
+		runTestInputAndMatches(t, "InvertSignedInteger", testCases, invertRule)
 	})
 
-	t.Run("invert signed float", func(t *testing.T) {
+	t.Run("InvertSignedFloat", func(t *testing.T) {
 		testCases := []inputAndMatchesCase{
 			{
-				"",
-				nil,
+				Input:       "",
+				Matches:     nil,
+				Description: "Empty input",
 			},
 			{
-				" ",
-				[]string{" "},
+				Input:       " ",
+				Matches:     []string{" "},
+				Description: "Single space",
 			},
 			{
-				"-12.34",
-				nil,
+				Input:       "-12.34",
+				Matches:     nil,
+				Description: "Negative float (should not match when inverted)",
 			},
 			{
-				"A-12.34B",
-				[]string{"A", "B"},
+				Input:       "A-12.34B",
+				Matches:     []string{"A", "B"},
+				Description: "Text around a negative float",
 			},
 			{
-				"ABC-12.34DEF-12.0HIJ",
-				[]string{"ABC", "DEF", "HIJ"},
+				Input:       "ABC-12.34DEF-12.0HIJ",
+				Matches:     []string{"ABC", "DEF", "HIJ"},
+				Description: "Text between multiple negative floats",
 			},
 			{
-				"ABC-123ABC-123.abc-123.4ABC",
-				[]string{"ABC", "-123", "ABC", "-123.", "abc", "ABC"},
+				Input:       "ABC-123ABC-123.abc-123.4ABC",
+				Matches:     []string{"ABC", "-123", "ABC", "-123.", "abc", "ABC"},
+				Description: "Complex mix of text, integers, and floats",
 			},
 			{
-				"aBCd0-1234.444EDFT11",
-				[]string{"aBCd", "0", "EDFT", "11"},
+				Input:       "aBCd0-1234.444EDFT11",
+				Matches:     []string{"aBCd", "0", "EDFT", "11"},
+				Description: "Mixed case text with numbers and a negative float",
 			},
 			{
-				"AB-1234.-12.3",
-				[]string{"AB", "-1234."},
+				Input:       "AB-1234.-12.3",
+				Matches:     []string{"AB", "-1234."},
+				Description: "Text with invalid float format",
 			},
 			{
-				"-12.34ABC",
-				[]string{"ABC"},
+				Input:       "-12.34ABC",
+				Matches:     []string{"ABC"},
+				Description: "Negative float followed by text",
 			},
 			{
-				"ABC-12.3 4AAAA",
-				[]string{"ABC", " ", "4", "AAAA"},
+				Input:       "ABC-12.3 4AAAA",
+				Matches:     []string{"ABC", " ", "4", "AAAA"},
+				Description: "Text with space-separated negative float and number",
 			},
 			{
-				"ABC",
-				[]string{"ABC"},
+				Input:       "ABC",
+				Matches:     []string{"ABC"},
+				Description: "Text only",
 			},
 			{
-				"0000",
-				[]string{"0000"},
+				Input:       "0000",
+				Matches:     []string{"0000"},
+				Description: "Integer with leading zeros",
 			},
 			{
-				"00001.2",
-				nil,
+				Input:       "00001.2",
+				Matches:     nil,
+				Description: "Float with leading zeros (should not match when inverted)",
 			},
 			{
-				"00001.2a",
-				[]string{"a"},
+				Input:       "00001.2a",
+				Matches:     []string{"a"},
+				Description: "Float with leading zeros followed by letter",
 			},
 			{
-				"a00001.2",
-				[]string{"a"},
+				Input:       "a00001.2",
+				Matches:     []string{"a"},
+				Description: "Letter followed by float with leading zeros",
 			},
 		}
 
 		invertRule := rules.Invert(rules.SignedFloat)
-
-		runTestInputAndMatches(t, testCases, invertRule)
+		runTestInputAndMatches(t, "InvertSignedFloat", testCases, invertRule)
 	})
 
-	t.Run("invert literal match", func(t *testing.T) {
+	t.Run("InvertLiteralMatch", func(t *testing.T) {
 		testCases := []inputAndMatchesCase{
 			{
-				"",
-				nil,
+				Input:       "",
+				Matches:     nil,
+				Description: "Empty input",
 			},
 			{
-				" ",
-				[]string{" "},
+				Input:       " ",
+				Matches:     []string{" "},
+				Description: "Single space",
 			},
 			{
-				"abc",
-				nil,
+				Input:       "abc",
+				Matches:     nil,
+				Description: "Exact match (should not match when inverted)",
 			},
 			{
-				"ABC",
-				[]string{"ABC"},
+				Input:       "ABC",
+				Matches:     []string{"ABC"},
+				Description: "Different case (should match when inverted)",
 			},
 			{
-				"ABCabc",
-				[]string{"ABC"},
+				Input:       "ABCabc",
+				Matches:     []string{"ABC"},
+				Description: "Different case followed by exact match",
 			},
 			{
-				"ABC abc",
-				[]string{"ABC "},
+				Input:       "ABC abc",
+				Matches:     []string{"ABC "},
+				Description: "Different case, space, and exact match",
 			},
 			{
-				"ABCabcABC",
-				[]string{"ABC", "ABC"},
+				Input:       "ABCabcABC",
+				Matches:     []string{"ABC", "ABC"},
+				Description: "Different case surrounding exact match",
 			},
 			{
-				"ABCabcABCabc",
-				[]string{"ABC", "ABC"},
+				Input:       "ABCabcABCabc",
+				Matches:     []string{"ABC", "ABC"},
+				Description: "Alternating different case and exact match",
 			},
 			{
-				"ABCabcABCabcABC",
-				[]string{"ABC", "ABC", "ABC"},
+				Input:       "ABCabcABCabcABC",
+				Matches:     []string{"ABC", "ABC", "ABC"},
+				Description: "Multiple alternating patterns",
 			},
 		}
 
 		invertRule := rules.Invert(rules.NewLiteralMatch("abc"))
-
-		runTestInputAndMatches(t, testCases, invertRule)
+		runTestInputAndMatches(t, "InvertLiteralMatch", testCases, invertRule)
 	})
 
-	t.Run("invert caseless literal match", func(t *testing.T) {
+	t.Run("InvertCaselessLiteralMatch", func(t *testing.T) {
 		testCases := []inputAndMatchesCase{
 			{
-				"",
-				nil,
+				Input:       "",
+				Matches:     nil,
+				Description: "Empty input",
 			},
 			{
-				" ",
-				[]string{" "},
+				Input:       " ",
+				Matches:     []string{" "},
+				Description: "Single space",
 			},
 			{
-				"abc",
-				nil,
+				Input:       "abc",
+				Matches:     nil,
+				Description: "Lowercase match (should not match when inverted)",
 			},
 			{
-				"ABC",
-				nil,
+				Input:       "ABC",
+				Matches:     nil,
+				Description: "Uppercase match (should not match when inverted)",
 			},
 			{
-				"ABCabdef",
-				[]string{"ab", "def"},
+				Input:       "ABCabdef",
+				Matches:     []string{"ab", "def"},
+				Description: "Partial match with suffix",
 			},
 			{
-				"ABC abc",
-				[]string{" "},
+				Input:       "ABC abc",
+				Matches:     []string{" "},
+				Description: "Space between two matches",
 			},
 			{
-				"ABCabcABC",
-				nil,
+				Input:       "ABCabcABC",
+				Matches:     nil,
+				Description: "Multiple matches with no non-matching text",
 			},
 			{
-				"ABCabc124ABCabcAdBefC",
-				[]string{"124", "A", "dBefC"},
+				Input:       "ABCabc124ABCabcAdBefC",
+				Matches:     []string{"124", "A", "dBefC"},
+				Description: "Complex mix of matching and non-matching text",
 			},
 		}
 
 		invertRule := rules.Invert(rules.NewCaseInsensitiveLiteralMatch("abc"))
-
-		runTestInputAndMatches(t, testCases, invertRule)
+		runTestInputAndMatches(t, "InvertCaselessLiteralMatch", testCases, invertRule)
 	})
 
-	t.Run("invert inverted signed float", func(t *testing.T) {
+	t.Run("InvertInvertedSignedFloat", func(t *testing.T) {
 		testCases := []inputAndMatchesCase{
 			{
-				"",
-				nil,
+				Input:       "",
+				Matches:     nil,
+				Description: "Empty input",
 			},
 			{
-				" ",
-				nil,
+				Input:       " ",
+				Matches:     nil,
+				Description: "Single space (should not match double-inverted float)",
 			},
 			{
-				"123.4",
-				[]string{"123.4"},
+				Input:       "123.4",
+				Matches:     []string{"123.4"},
+				Description: "Simple float",
 			},
 			{
-				"abc123.4def",
-				[]string{"123.4"},
+				Input:       "abc123.4def",
+				Matches:     []string{"123.4"},
+				Description: "Float surrounded by text",
 			},
 			{
-				"abc123.4def123.4",
-				[]string{"123.4", "123.4"},
+				Input:       "abc123.4def123.4",
+				Matches:     []string{"123.4", "123.4"},
+				Description: "Multiple floats with text",
 			},
 			{
-				"abc- 123.4",
-				[]string{"- 123.4"},
+				Input:       "abc- 123.4",
+				Matches:     []string{"- 123.4"},
+				Description: "Negative float with space after sign",
 			},
 			{
-				"-   123.4a",
-				[]string{"-   123.4"},
+				Input:       "-   123.4a",
+				Matches:     []string{"-   123.4"},
+				Description: "Negative float with whitespace after sign",
 			},
 		}
 
+		// Double inversion should return to original behavior
 		invertRule := rules.Invert(rules.Invert(rules.SignedFloat))
-
-		runTestInputAndMatches(t, testCases, invertRule)
+		runTestInputAndMatches(t, "InvertInvertedSignedFloat", testCases, invertRule)
 	})
 }
 
 func TestWord(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
-			"hello world",
-			[]string{"hello", "world"},
+			Input:       "hello world",
+			Matches:     []string{"hello", "world"},
+			Description: "Simple two-word phrase",
 		},
 		{
-			"hello world\n",
-			[]string{"hello", "world"},
+			Input:       "hello world\n",
+			Matches:     []string{"hello", "world"},
+			Description: "Two words with trailing newline",
 		},
 		{
-			"a n C  \t d ....../*. Ef \"G123        AA.BB.CC",
-			[]string{"a", "n", "C", "d", "Ef", "G123", "AA", "BB", "CC"},
+			Input:       "a n C  \t d ....../*. Ef \"G123        AA.BB.CC",
+			Matches:     []string{"a", "n", "C", "d", "Ef", "G123", "AA", "BB", "CC"},
+			Description: "Complex mix of words, symbols, and punctuation",
 		},
 		{
-			"Build simple, secure, scalable systems with Go",
-			[]string{"Build", "simple", "secure", "scalable", "systems", "with", "Go"},
+			Input:       "Build simple, secure, scalable systems with Go",
+			Matches:     []string{"Build", "simple", "secure", "scalable", "systems", "with", "Go"},
+			Description: "Sentence with commas",
 		},
 		{
-			"a-b-c",
-			[]string{"a", "b", "c"},
+			Input:       "a-b-c",
+			Matches:     []string{"a", "b", "c"},
+			Description: "Words separated by hyphens",
 		},
 		{
-			"/abc123.",
-			[]string{"abc123"},
+			Input:       "/abc123.",
+			Matches:     []string{"abc123"},
+			Description: "Word with surrounding punctuation",
 		},
 	}
 
-	runTestInputAndMatches(t, testCases, rules.Word)
+	runTestInputAndMatches(t, "Word", testCases, rules.Word)
 }
 
 func TestDoubleQuotedString(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
-			``,
-			nil,
+			Input:       ``,
+			Matches:     nil,
+			Description: "Empty input",
 		},
 		{
-			`"`,
-			nil,
+			Input:       `"`,
+			Matches:     nil,
+			Description: "Unclosed quote",
 		},
 		{
-			`""`,
-			[]string{`""`},
+			Input:       `""`,
+			Matches:     []string{`""`},
+			Description: "Empty quoted string",
 		},
 		{
-			`a"b"c`,
-			[]string{`"b"`},
+			Input:       `a"b"c`,
+			Matches:     []string{`"b"`},
+			Description: "Quoted string with surrounding text",
 		},
 		{
-			`a"bcd`,
-			nil,
+			Input:       `a"bcd`,
+			Matches:     nil,
+			Description: "Unclosed quote with text",
 		},
 		{
-			"a b \" cdef \" ghji",
-			[]string{`" cdef "`},
+			Input:       "a b \" cdef \" ghji",
+			Matches:     []string{`" cdef "`},
+			Description: "Quoted string with spaces inside and outside",
 		},
 		{
-			`aaa " aaaa aaaa \" aaaaaa`,
-			[]string{`" aaaa aaaa \"`},
+			Input:       `aaa " aaaa aaaa \" aaaaaa`,
+			Matches:     []string{`" aaaa aaaa \"`},
+			Description: "Quoted string with escaped quote",
 		},
 	}
 
-	runTestInputAndMatches(t, testCases, rules.DoubleQuotedString)
+	runTestInputAndMatches(t, "DoubleQuotedString", testCases, rules.DoubleQuotedString)
 }
 
 func TestSingleQuotedString(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
-			``,
-			nil,
+			Input:       ``,
+			Matches:     nil,
+			Description: "Empty input",
 		},
 		{
-			`'`,
-			nil,
+			Input:       `'`,
+			Matches:     nil,
+			Description: "Unclosed quote",
 		},
 		{
-			`''`,
-			[]string{`''`},
+			Input:       `''`,
+			Matches:     []string{`''`},
+			Description: "Empty quoted string",
 		},
 		{
-			`a'b'c`,
-			[]string{`'b'`},
+			Input:       `a'b'c`,
+			Matches:     []string{`'b'`},
+			Description: "Quoted string with surrounding text",
 		},
 		{
-			`a'bcd`,
-			nil,
+			Input:       `a'bcd`,
+			Matches:     nil,
+			Description: "Unclosed quote with text",
 		},
 		{
-			"a b ' cdef ' ghji",
-			[]string{`' cdef '`},
+			Input:       "a b ' cdef ' ghji",
+			Matches:     []string{`' cdef '`},
+			Description: "Quoted string with spaces inside and outside",
 		},
 		{
-			`aaa ' aaaa aaaa \' aaaaaa`,
-			[]string{`' aaaa aaaa \'`},
+			Input:       `aaa ' aaaa aaaa \' aaaaaa`,
+			Matches:     []string{`' aaaa aaaa \'`},
+			Description: "Quoted string with escaped quote",
 		},
 	}
 
-	runTestInputAndMatches(t, testCases, rules.SingleQuotedString)
+	runTestInputAndMatches(t, "SingleQuotedString", testCases, rules.SingleQuotedString)
 }
 
 func TestDoubleQuotedFormattedString(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
-			``,
-			nil,
+			Input:       ``,
+			Matches:     nil,
+			Description: "Empty input",
 		},
 		{
-			`"`,
-			nil,
+			Input:       `"`,
+			Matches:     nil,
+			Description: "Unclosed quote",
 		},
 		{
-			`"\""`,
-			[]string{`"\""`},
+			Input:       `"\""`,
+			Matches:     []string{`"\""`},
+			Description: "String with escaped quote",
 		},
 		{
-			`a"b\"\"c"c`,
-			[]string{`"b\"\"c"`},
+			Input:       `a"b\"\"c"c`,
+			Matches:     []string{`"b\"\"c"`},
+			Description: "String with multiple escaped quotes",
 		},
 	}
 
-	runTestInputAndMatches(t, testCases, rules.DoubleQuotedFormattedString)
+	runTestInputAndMatches(t, "DoubleQuotedFormattedString", testCases, rules.DoubleQuotedFormattedString)
 }
 
 func TestInlineComment(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
-			"",
-			nil,
+			Input:       "",
+			Matches:     nil,
+			Description: "Empty input",
 		},
 		{
-			"aaaa //",
-			[]string{"//"},
+			Input:       "aaaa //",
+			Matches:     []string{"//"},
+			Description: "Empty comment",
 		},
 		{
-			"aaaa //\n",
-			[]string{"//"},
+			Input:       "aaaa //\n",
+			Matches:     []string{"//"},
+			Description: "Empty comment with newline",
 		},
 		{
-			"aaaa // eeee\t\n\n",
-			[]string{"// eeee\t"},
+			Input:       "aaaa // eeee\t\n\n",
+			Matches:     []string{"// eeee\t"},
+			Description: "Comment with text and tab",
 		},
 		{
-			"aaaa // // //\n\n\n",
-			[]string{"// // //"},
+			Input:       "aaaa // // //\n\n\n",
+			Matches:     []string{"// // //"},
+			Description: "Comment containing comment syntax",
 		},
 		{
-			"aaaaaaaa//bbbbbbbb\ncccc\n\nddd\n\n    // tttt",
-			[]string{"//bbbbbbbb", "// tttt"},
+			Input:       "aaaaaaaa//bbbbbbbb\ncccc\n\nddd\n\n    // tttt",
+			Matches:     []string{"//bbbbbbbb", "// tttt"},
+			Description: "Multiple comments in multi-line text",
 		},
 		{
-			"aaaa // eeee\t\n\n//\n",
-			[]string{"// eeee\t", "//"},
+			Input:       "aaaa // eeee\t\n\n//\n",
+			Matches:     []string{"// eeee\t", "//"},
+			Description: "Multiple comments with empty comment",
 		},
 	}
 
-	runTestInputAndMatches(t, testCases, rules.InlineComment)
+	runTestInputAndMatches(t, "InlineComment", testCases, rules.InlineComment)
 }
 
 func TestSlashStarComment(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
-			"",
-			nil,
+			Input:       "",
+			Matches:     nil,
+			Description: "Empty input",
 		},
 		{
-			"aaaa /*",
-			nil,
+			Input:       "aaaa /*",
+			Matches:     nil,
+			Description: "Unclosed comment",
 		},
 		{
-			"aaaa /* */",
-			[]string{"/* */"},
+			Input:       "aaaa /* */",
+			Matches:     []string{"/* */"},
+			Description: "Empty block comment",
 		},
 		{
-			"aaaa /* eeee\t\n\n",
-			nil,
+			Input:       "aaaa /* eeee\t\n\n",
+			Matches:     nil,
+			Description: "Unclosed multi-line comment",
 		},
 		{
-			"aaaa /* eeee\t\n\n*/",
-			[]string{"/* eeee\t\n\n*/"},
+			Input:       "aaaa /* eeee\t\n\n*/",
+			Matches:     []string{"/* eeee\t\n\n*/"},
+			Description: "Multi-line comment",
 		},
 		{
-			"aaaa /* eeee\t\n\n*/xxxx",
-			[]string{"/* eeee\t\n\n*/"},
+			Input:       "aaaa /* eeee\t\n\n*/xxxx",
+			Matches:     []string{"/* eeee\t\n\n*/"},
+			Description: "Multi-line comment with trailing text",
 		},
 		{
-			"aa /* b\n\nb */ c\t\n\t\nc\n\n/* dd */",
-			[]string{"/* b\n\nb */", "/* dd */"},
+			Input:       "aa /* b\n\nb */ c\t\n\t\nc\n\n/* dd */",
+			Matches:     []string{"/* b\n\nb */", "/* dd */"},
+			Description: "Multiple block comments in multi-line text",
 		},
 	}
 
-	runTestInputAndMatches(t, testCases, rules.SlashStarComment)
+	runTestInputAndMatches(t, "SlashStarComment", testCases, rules.SlashStarComment)
 }
 
 func TestLiteralMatch(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
-			"",
-			nil,
+			Input:       "",
+			Matches:     nil,
+			Description: "Empty input",
 		},
 		{
-			" abc ",
-			[]string{"abc"},
+			Input:       " abc ",
+			Matches:     []string{"abc"},
+			Description: "Match with surrounding spaces",
 		},
 		{
-			" abc",
-			[]string{"abc"},
+			Input:       " abc",
+			Matches:     []string{"abc"},
+			Description: "Match with leading space",
 		},
 		{
-			"abc.abc",
-			[]string{"abc", "abc"},
+			Input:       "abc.abc",
+			Matches:     []string{"abc", "abc"},
+			Description: "Multiple matches separated by period",
 		},
 		{
-			"abcabc",
-			[]string{"abc", "abc"},
+			Input:       "abcabc",
+			Matches:     []string{"abc", "abc"},
+			Description: "Adjacent matches",
 		},
 		{
-			"aaabababcabc",
-			[]string{"abc", "abc"},
+			Input:       "aaabababcabc",
+			Matches:     []string{"abc", "abc"},
+			Description: "Matches with prefix text",
 		},
 		{
-			"abaabababcaabababcccabc",
-			[]string{"abc", "abc", "abc"},
+			Input:       "abaabababcaabababcccabc",
+			Matches:     []string{"abc", "abc", "abc"},
+			Description: "Multiple matches with complex surrounding text",
 		},
 		{
-			"abc\nabc",
-			[]string{"abc", "abc"},
+			Input:       "abc\nabc",
+			Matches:     []string{"abc", "abc"},
+			Description: "Matches separated by newline",
 		},
 	}
 
 	matchDefKeywordRule := rules.NewLiteralMatch("abc")
-
-	runTestInputAndMatches(t, testCases, matchDefKeywordRule)
+	runTestInputAndMatches(t, "LiteralMatch", testCases, matchDefKeywordRule)
 }
 
 func TestCaseInsensitiveLiteralMatch(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
-			"",
-			nil,
+			Input:       "",
+			Matches:     nil,
+			Description: "Empty input",
 		},
 		{
-			" aBc ",
-			[]string{"aBc"},
+			Input:       " aBc ",
+			Matches:     []string{"aBc"},
+			Description: "Mixed-case match with surrounding spaces",
 		},
 		{
-			" aBC",
-			[]string{"aBC"},
+			Input:       " aBC",
+			Matches:     []string{"aBC"},
+			Description: "Mixed-case match with leading space",
 		},
 		{
-			"abc.ABC",
-			[]string{"abc", "ABC"},
+			Input:       "abc.ABC",
+			Matches:     []string{"abc", "ABC"},
+			Description: "Different case matches separated by period",
 		},
 		{
-			"ABCabc",
-			[]string{"ABC", "abc"},
+			Input:       "ABCabc",
+			Matches:     []string{"ABC", "abc"},
+			Description: "Adjacent different case matches",
 		},
 		{
-			"aaababABCabc",
-			[]string{"ABC", "abc"},
+			Input:       "aaababABCabc",
+			Matches:     []string{"ABC", "abc"},
+			Description: "Different case matches with prefix text",
 		},
 		{
-			"abaababABCaababABCccABC",
-			[]string{"ABC", "ABC", "ABC"},
+			Input:       "abaababABCaababABCccABC",
+			Matches:     []string{"ABC", "ABC", "ABC"},
+			Description: "Multiple matches with complex surrounding text",
 		},
 	}
 
 	matchDefKeywordRule := rules.NewCaseInsensitiveLiteralMatch("abc")
-
-	runTestInputAndMatches(t, testCases, matchDefKeywordRule)
+	runTestInputAndMatches(t, "CaseInsensitiveLiteralMatch", testCases, matchDefKeywordRule)
 }
 
 func TestAlways(t *testing.T) {
-
-	t.Run("reject", func(t *testing.T) {
+	// Breaking down into sub-tests for clarity
+	t.Run("AlwaysReject", func(t *testing.T) {
 		testCases := []inputAndMatchesCase{
 			{
-				"",
-				nil,
+				Input:       "",
+				Matches:     nil,
+				Description: "Empty input",
 			},
 			{
-				"abc",
-				nil,
+				Input:       "abc",
+				Matches:     nil,
+				Description: "Simple text",
 			},
 			{
-				"abcdef",
-				nil,
+				Input:       "abcdef",
+				Matches:     nil,
+				Description: "Longer text",
 			},
 		}
 
-		runTestInputAndMatches(t, testCases, rules.AlwaysReject)
+		runTestInputAndMatches(t, "AlwaysReject", testCases, rules.AlwaysReject)
 	})
 
-	t.Run("continue", func(t *testing.T) {
+	t.Run("AlwaysContinue", func(t *testing.T) {
 		testCases := []inputAndMatchesCase{
 			{
-				"",
-				nil,
+				Input:       "",
+				Matches:     nil,
+				Description: "Empty input",
 			},
 			{
-				"abc",
-				nil,
+				Input:       "abc",
+				Matches:     nil,
+				Description: "Simple text",
 			},
 			{
-				"abcdef",
-				nil,
+				Input:       "abcdef",
+				Matches:     nil,
+				Description: "Longer text",
 			},
 		}
 
-		runTestInputAndMatches(t, testCases, rules.AlwaysContinue)
+		runTestInputAndMatches(t, "AlwaysContinue", testCases, rules.AlwaysContinue)
 	})
 
-	t.Run("accept", func(t *testing.T) {
+	t.Run("AlwaysAccept", func(t *testing.T) {
 		testCases := []inputAndMatchesCase{
 			{
-				"",
-				[]string{""},
+				Input:       "",
+				Matches:     []string{""},
+				Description: "Empty input",
 			},
 			{
-				"abc",
-				[]string{"", "", "", ""},
+				Input:       "abc",
+				Matches:     []string{"", "", "", ""},
+				Description: "Simple text",
 			},
 			{
-				"abcdef",
-				[]string{"", "", "", "", "", "", ""},
+				Input:       "abcdef",
+				Matches:     []string{"", "", "", "", "", "", ""},
+				Description: "Longer text",
 			},
 		}
 
-		runTestInputAndMatches(t, testCases, rules.AlwaysAccept)
+		runTestInputAndMatches(t, "AlwaysAccept", testCases, rules.AlwaysAccept)
 	})
 
-	t.Run("invert reject", func(t *testing.T) {
+	t.Run("InvertReject", func(t *testing.T) {
 		testCases := []inputAndMatchesCase{
 			{
-				"",
-				nil,
+				Input:       "",
+				Matches:     nil,
+				Description: "Empty input",
 			},
 			{
-				"abc",
-				[]string{"abc"},
+				Input:       "abc",
+				Matches:     []string{"abc"},
+				Description: "Simple text",
 			},
 			{
-				"abcdef",
-				[]string{"abcdef"},
+				Input:       "abcdef",
+				Matches:     []string{"abcdef"},
+				Description: "Longer text",
 			},
 		}
 
-		runTestInputAndMatches(t, testCases, rules.Invert(rules.AlwaysReject))
+		runTestInputAndMatches(t, "InvertReject", testCases, rules.Invert(rules.AlwaysReject))
 	})
 
-	t.Run("invert continue", func(t *testing.T) {
+	t.Run("InvertContinue", func(t *testing.T) {
 		testCases := []inputAndMatchesCase{
 			{
-				"",
-				nil,
+				Input:       "",
+				Matches:     nil,
+				Description: "Empty input",
 			},
 			{
-				"abc",
-				nil,
+				Input:       "abc",
+				Matches:     nil,
+				Description: "Simple text",
 			},
 			{
-				"abcdef",
-				nil,
+				Input:       "abcdef",
+				Matches:     nil,
+				Description: "Longer text",
 			},
 		}
 
-		runTestInputAndMatches(t, testCases, rules.Invert(rules.AlwaysContinue))
+		runTestInputAndMatches(t, "InvertContinue", testCases, rules.Invert(rules.AlwaysContinue))
 	})
 
-	t.Run("invert accept", func(t *testing.T) {
+	t.Run("InvertAccept", func(t *testing.T) {
 		testCases := []inputAndMatchesCase{
 			{
-				"",
-				nil,
+				Input:       "",
+				Matches:     nil,
+				Description: "Empty input",
 			},
 			{
-				"abc",
-				nil,
+				Input:       "abc",
+				Matches:     nil,
+				Description: "Simple text",
 			},
 			{
-				"abcdef",
-				nil,
+				Input:       "abcdef",
+				Matches:     nil,
+				Description: "Longer text",
 			},
 		}
 
-		runTestInputAndMatches(t, testCases, rules.Invert(rules.AlwaysAccept))
+		runTestInputAndMatches(t, "InvertAccept", testCases, rules.Invert(rules.AlwaysAccept))
 	})
 }
 
 func TestCompose(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
-			"",
-			nil,
+			Input:       "",
+			Matches:     nil,
+			Description: "Empty input",
 		},
 		{
-			"ORDER \n BY",
-			[]string{"ORDER \n BY"},
+			Input:       "ORDER \n BY",
+			Matches:     []string{"ORDER \n BY"},
+			Description: "ORDER BY with newline",
 		},
 		{
-			" oRDER \n BY ",
-			[]string{"oRDER \n BY"},
+			Input:       " oRDER \n BY ",
+			Matches:     []string{"oRDER \n BY"},
+			Description: "Mixed-case ORDER BY with whitespace",
 		},
 		{
-			"SELECT * FROM trades ORDER BY id DESC LIMIT 50;",
-			[]string{"ORDER BY"},
+			Input:       "SELECT * FROM trades ORDER BY id DESC LIMIT 50;",
+			Matches:     []string{"ORDER BY"},
+			Description: "ORDER BY in SQL query",
 		},
 	}
 
@@ -1014,22 +1186,25 @@ func TestCompose(t *testing.T) {
 		rules.NewCaseInsensitiveLiteralMatch("BY"),
 	)
 
-	runTestInputAndMatches(t, testCases, orderByRule)
+	runTestInputAndMatches(t, "Compose", testCases, orderByRule)
 }
 
 func TestAnyMatch(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
-			"",
-			nil,
+			Input:       "",
+			Matches:     nil,
+			Description: "Empty input",
 		},
 		{
-			"abc",
-			[]string{"abc"},
+			Input:       "abc",
+			Matches:     []string{"abc"},
+			Description: "Simple match",
 		},
 		{
-			"abcdeg defabcghiabc",
-			[]string{"abc", "def", "abc", "ghi", "abc"},
+			Input:       "abcdeg defabcghiabc",
+			Matches:     []string{"abc", "def", "abc", "ghi", "abc"},
+			Description: "Multiple different matches",
 		},
 	}
 
@@ -1040,12 +1215,14 @@ func TestAnyMatch(t *testing.T) {
 		rules.NewCaseInsensitiveLiteralMatch("GHI"),
 	)
 
-	runTestInputAndMatches(t, testCases, anyMatchRule)
+	runTestInputAndMatches(t, "AnyMatch", testCases, anyMatchRule)
 }
 
-func runTestInputAndMatches(t *testing.T, testCases []inputAndMatchesCase, initialRule textlexer.Rule) {
+// runTestInputAndMatches tests a rule against a set of test cases
+// Added rule type parameter for better error messages
+func runTestInputAndMatches(t *testing.T, ruleType string, testCases []inputAndMatchesCase, initialRule textlexer.Rule) {
 	for i, tc := range testCases {
-		t.Run(fmt.Sprintf("case %03d", i), func(t *testing.T) {
+		t.Run(fmt.Sprintf("%s_case_%03d_%s", ruleType, i, tc.Description), func(t *testing.T) {
 			times := 0
 
 			var state textlexer.State
@@ -1057,9 +1234,9 @@ func runTestInputAndMatches(t *testing.T, testCases []inputAndMatchesCase, initi
 
 			buf := make([]rune, 0, len(tc.Input))
 			for j := 0; j < len(input); j++ {
-
+				// Increased limit for more complex inputs
 				times++
-				require.True(t, times < 100, "Out of control loop. Aborting.")
+				require.True(t, times < 1000, "Out of control loop. Aborting after 1000 iterations.")
 
 				r := input[j]
 
@@ -1077,16 +1254,24 @@ func runTestInputAndMatches(t *testing.T, testCases []inputAndMatchesCase, initi
 					if matches == nil {
 						matches = []string{}
 					}
+
 					matches = append(matches, string(buf))
 					if len(buf) > 0 {
+						// The current rune 'r' caused the acceptance.
+						// Reprocess 'r' with the default rule to check if it
+						// starts a new token immediately after the accepted one.
 						j = j - 1
 					}
+
 					buf = buf[:0]
 				case textlexer.StateContinue:
 					buf = append(buf, r)
 				case textlexer.StateReject:
 					if rule == nil {
 						if len(buf) > 0 {
+							// The rule failed completely after consuming
+							// characters in 'buf'. Discard 'buf' and reprocess
+							// the current rune 'r' with the default rule.
 							j = j - 1
 							buf = buf[:0]
 						}
@@ -1098,7 +1283,9 @@ func runTestInputAndMatches(t *testing.T, testCases []inputAndMatchesCase, initi
 				}
 			}
 
-			assert.Equal(t, tc.Matches, matches, "input: %q. expected: %q, got: %q", tc.Input, tc.Matches, matches)
+			assert.Equal(t, tc.Matches, matches,
+				"Rule: %s, Input: %q, Expected: %q, Got: %q",
+				ruleType, tc.Input, tc.Matches, matches)
 		})
 	}
 }

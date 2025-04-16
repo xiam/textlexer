@@ -1,22 +1,16 @@
 package rules
 
-import (
-	"unicode"
-)
-
-func isSpace(r rune) bool {
-	switch byte(r) {
+// isCommonWhitespace returns true if r is a common whitespace
+func isCommonWhitespace(r rune) bool {
+	switch r {
 	case ' ', '\t', '\r', '\n', '\f':
 		return true
 	}
 	return false
 }
 
-func toLower(r rune) rune {
-	return unicode.ToLower(r)
-}
-
-func isLetter(r rune) bool {
+// isASCIILetter returns true if r is an ASCII letter (a-z, A-Z).
+func isASCIILetter(r rune) bool {
 	if r >= 'a' && r <= 'z' {
 		return true
 	}
@@ -26,7 +20,8 @@ func isLetter(r rune) bool {
 	return false
 }
 
-func isNumeric(r rune) bool {
+// isASCIIDigit returns true if r is an ASCII digit (0-9)
+func isASCIIDigit(r rune) bool {
 	if r >= '0' && r <= '9' {
 		return true
 	}

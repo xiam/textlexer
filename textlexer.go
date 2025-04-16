@@ -95,15 +95,16 @@ func (lx *TextLexer) Next() (*Lexeme, error) {
 			if state == StateAccept {
 				delete(scanners, lexType)
 
+				// TODO: review
 				if offset > 0 {
 					lastLexeme = &Lexeme{
-						Type:   lexType,
+						typ:    lexType,
 						text:   buf,
 						offset: lx.offset + offset,
 					}
 				} else {
 					lastLexeme = &Lexeme{
-						Type:   lexType,
+						typ:    lexType,
 						text:   []rune{r},
 						offset: lx.offset + 1,
 					}
@@ -132,7 +133,7 @@ func (lx *TextLexer) Next() (*Lexeme, error) {
 
 	if !isEOF {
 		lastLexeme = &Lexeme{
-			Type:   LexemeTypeUnknown,
+			typ:    LexemeTypeUnknown,
 			text:   buf,
 			offset: lx.offset + offset,
 		}
