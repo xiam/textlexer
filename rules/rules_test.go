@@ -2,7 +2,7 @@ package rules_test
 
 import (
 	"fmt"
-	"strings" // Import strings package for repetition
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -148,7 +148,7 @@ func TestMatchSignedInteger(t *testing.T) {
 		{
 			Input:       "- a  1",
 			Matches:     []string{"1"},
-			Description: "Minus sign separated from number by non-whitespace", // Adjusted expectation based on likely rule logic
+			Description: "Minus sign separated from number by non-whitespace",
 		},
 		{
 			Input:       "-   1",
@@ -837,13 +837,13 @@ func TestWhitespace(t *testing.T) {
 			Description: "Trailing space",
 		},
 		{
-			Input:       "\u00a0", // Non-breaking space (might or might not be included, depends on definition)
-			Matches:     nil,      // Assuming standard ASCII whitespace only
+			Input:       "\u00a0",
+			Matches:     nil,
 			Description: "Non-breaking space (unicode)",
 		},
 		{
 			Input:       "\u2003", // Em space (unicode)
-			Matches:     nil,      // Assuming standard ASCII whitespace only
+			Matches:     nil,
 			Description: "Em space (unicode)",
 		},
 	}
@@ -1588,8 +1588,8 @@ func TestMatchSingleQuotedString(t *testing.T) {
 			Description: "Quoted string with spaces inside and outside",
 		},
 		{
-			Input:       `aaa ' aaaa aaaa \' aaaaaa`, // Note: Original expectation might be wrong
-			Matches:     []string{`' aaaa aaaa \'`},  // Assuming \ is literal unless followed by '
+			Input:       `aaa ' aaaa aaaa \' aaaaaa`,
+			Matches:     []string{`' aaaa aaaa \'`},
 			Description: "Quoted string with potentially escaped quote (check rule impl)",
 		},
 		// Destructive/Edge Cases Added:
@@ -1654,14 +1654,11 @@ func TestMatchSingleQuotedString(t *testing.T) {
 			Description: "String ending with escaped backslash",
 		},
 	}
-	// Note: The behavior of escapes (`\'`, `\\`, `\n`, etc.) depends heavily
-	// on the specific implementation of the MatchSingleQuotedString rule.
-	// Adjust expected matches based on the actual rule logic.
+
 	runTestInputAndMatches(t, "MatchSingleQuotedString", testCases, rules.MatchSingleQuotedString)
 }
 
 func TestMatchEscapedDoubleQuotedString(t *testing.T) {
-	// This rule likely implies more complex escape handling (like C printf)
 	testCases := []inputAndMatchesCase{
 		// Existing cases...
 		{
@@ -1756,8 +1753,7 @@ func TestMatchEscapedDoubleQuotedString(t *testing.T) {
 			Description: "Formatted string ending with escaped backslash",
 		},
 	}
-	// Note: The exact behavior of formatted strings depends heavily on which
-	// escape sequences are supported. Adjust expectations accordingly.
+
 	runTestInputAndMatches(t, "MatchEscapedDoubleQuotedString", testCases, rules.MatchEscapedDoubleQuotedString)
 }
 
@@ -2259,10 +2255,6 @@ func TestAlways(t *testing.T) {
 				Description: "InvertReject with space only",
 			},
 		}
-		// NewMatchInvertedRule(Reject) should accept any single rune and continue, effectively consuming the whole input as one token.
-		// The runner logic might split this differently based on how Accept works.
-		// Let's assume the runner's Accept logic (`j=j-1`) doesn't apply well here,
-		// and NewMatchInvertedRule(Reject) effectively acts like "match until EOF".
 		runTestInputAndMatches(t, "InvertReject", testCases, rules.NewMatchInvertedRule(rules.RejectCurrent))
 	})
 
@@ -2276,7 +2268,7 @@ func TestAlways(t *testing.T) {
 			},
 			{
 				Input:       "abc",
-				Matches:     nil, // NewMatchInvertedRule(Continue) should still be Continue? Or Reject? Assume Reject.
+				Matches:     nil,
 				Description: "Simple text",
 			},
 			{
@@ -2291,9 +2283,7 @@ func TestAlways(t *testing.T) {
 				Description: "InvertContinue with space",
 			},
 		}
-		// NewMatchInvertedRule(Continue) is tricky. If Continue means "need more input",
-		// inverting it might mean "don't need more input", which could be Accept or Reject.
-		// Let's assume it becomes Reject (fails immediately).
+
 		runTestInputAndMatches(t, "InvertContinue", testCases, rules.NewMatchInvertedRule(rules.MatchAnyCharacter))
 	})
 
