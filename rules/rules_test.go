@@ -19,7 +19,7 @@ type inputAndMatchesCase struct {
 	Description string // Added description field for better test documentation
 }
 
-func TestUnsignedInteger(t *testing.T) {
+func TestMatchUnsignedInteger(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		// Existing cases...
 		{
@@ -124,10 +124,10 @@ func TestUnsignedInteger(t *testing.T) {
 			Description: "Extremely long unsigned integer",
 		},
 	}
-	runTestInputAndMatches(t, "UnsignedInteger", testCases, rules.UnsignedInteger)
+	runTestInputAndMatches(t, "MatchUnsignedInteger", testCases, rules.MatchUnsignedInteger)
 }
 
-func TestSignedInteger(t *testing.T) {
+func TestMatchSignedInteger(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		// Existing cases...
 		{
@@ -263,10 +263,10 @@ func TestSignedInteger(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, "SignedInteger", testCases, rules.SignedInteger)
+	runTestInputAndMatches(t, "MatchSignedInteger", testCases, rules.MatchSignedInteger)
 }
 
-func TestUnsignedFloat(t *testing.T) {
+func TestMatchUnsignedFloat(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		// Existing cases...
 		{
@@ -417,10 +417,10 @@ func TestUnsignedFloat(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, "UnsignedFloat", testCases, rules.UnsignedFloat)
+	runTestInputAndMatches(t, "MatchUnsignedFloat", testCases, rules.MatchUnsignedFloat)
 }
 
-func TestSignedFloat(t *testing.T) {
+func TestMatchSignedFloat(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		// Existing cases...
 		{
@@ -561,7 +561,7 @@ func TestSignedFloat(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, "SignedFloat", testCases, rules.SignedFloat)
+	runTestInputAndMatches(t, "MatchSignedFloat", testCases, rules.MatchSignedFloat)
 }
 
 func TestNumeric(t *testing.T) {
@@ -692,10 +692,10 @@ func TestNumeric(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, "Numeric", testCases, rules.Numeric)
+	runTestInputAndMatches(t, "Numeric", testCases, rules.MatchSignedNumeric)
 }
 
-func TestUnsignedNumeric(t *testing.T) {
+func TestMatchUnsignedNumeric(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		// Existing cases...
 		{
@@ -781,7 +781,7 @@ func TestUnsignedNumeric(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, "UnsignedNumeric", testCases, rules.UnsignedNumeric)
+	runTestInputAndMatches(t, "MatchUnsignedNumeric", testCases, rules.MatchUnsignedNumeric)
 }
 
 func TestWhitespace(t *testing.T) {
@@ -860,10 +860,10 @@ func TestWhitespace(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, "Whitespace", testCases, rules.Whitespace)
+	runTestInputAndMatches(t, "Whitespace", testCases, rules.MatchWhitespace)
 }
 
-func TestInvert(t *testing.T) {
+func TestNewMatchInvertedRule(t *testing.T) {
 	// --- InvertWhitespace ---
 	t.Run("InvertWhitespace", func(t *testing.T) {
 		testCases := []inputAndMatchesCase{
@@ -921,12 +921,12 @@ func TestInvert(t *testing.T) {
 			},
 		}
 
-		invertRule := rules.Invert(rules.Whitespace)
+		invertRule := rules.NewMatchInvertedRule(rules.MatchWhitespace)
 		runTestInputAndMatches(t, "InvertWhitespace", testCases, invertRule)
 	})
 
-	// --- InvertSignedInteger ---
-	t.Run("InvertSignedInteger", func(t *testing.T) {
+	// --- InvertMatchSignedInteger ---
+	t.Run("InvertMatchSignedInteger", func(t *testing.T) {
 		testCases := []inputAndMatchesCase{
 			// Existing cases...
 			{
@@ -992,12 +992,12 @@ func TestInvert(t *testing.T) {
 			},
 		}
 
-		invertRule := rules.Invert(rules.SignedInteger)
-		runTestInputAndMatches(t, "InvertSignedInteger", testCases, invertRule)
+		invertRule := rules.NewMatchInvertedRule(rules.MatchSignedInteger)
+		runTestInputAndMatches(t, "InvertMatchSignedInteger", testCases, invertRule)
 	})
 
-	// --- InvertSignedFloat ---
-	t.Run("InvertSignedFloat", func(t *testing.T) {
+	// --- InvertMatchSignedFloat ---
+	t.Run("InvertMatchSignedFloat", func(t *testing.T) {
 		testCases := []inputAndMatchesCase{
 			// Existing cases...
 			{
@@ -1123,8 +1123,8 @@ func TestInvert(t *testing.T) {
 			},
 		}
 
-		invertRule := rules.Invert(rules.SignedFloat)
-		runTestInputAndMatches(t, "InvertSignedFloat", testCases, invertRule)
+		invertRule := rules.NewMatchInvertedRule(rules.MatchSignedFloat)
+		runTestInputAndMatches(t, "InvertMatchSignedFloat", testCases, invertRule)
 	})
 
 	// --- InvertLiteralMatch ---
@@ -1209,7 +1209,7 @@ func TestInvert(t *testing.T) {
 			},
 		}
 
-		invertRule := rules.Invert(rules.NewLiteralMatch("abc"))
+		invertRule := rules.NewMatchInvertedRule(rules.NewMatchString("abc"))
 		runTestInputAndMatches(t, "InvertLiteralMatch", testCases, invertRule)
 	})
 
@@ -1290,12 +1290,12 @@ func TestInvert(t *testing.T) {
 			},
 		}
 
-		invertRule := rules.Invert(rules.NewCaseInsensitiveLiteralMatch("abc"))
+		invertRule := rules.NewMatchInvertedRule(rules.NewMatchStringIgnoreCase("abc"))
 		runTestInputAndMatches(t, "InvertCaselessLiteralMatch", testCases, invertRule)
 	})
 
-	// --- InvertInvertedSignedFloat ---
-	t.Run("InvertInvertedSignedFloat", func(t *testing.T) {
+	// --- InvertInvertedMatchSignedFloat ---
+	t.Run("InvertInvertedMatchSignedFloat", func(t *testing.T) {
 		testCases := []inputAndMatchesCase{
 			// Existing cases...
 			{
@@ -1333,7 +1333,7 @@ func TestInvert(t *testing.T) {
 				Matches:     []string{"-123.4"}, // Assuming sign rule consumes whitespace
 				Description: "Negative float with whitespace after sign",
 			},
-			// Destructive/Edge Cases Added (Should behave like SignedFloat):
+			// Destructive/Edge Cases Added (Should behave like MatchSignedFloat):
 			{
 				Input:       ".", // Not a float
 				Matches:     nil,
@@ -1377,8 +1377,8 @@ func TestInvert(t *testing.T) {
 		}
 
 		// Double inversion should return to original behavior
-		invertRule := rules.Invert(rules.Invert(rules.SignedFloat))
-		runTestInputAndMatches(t, "InvertInvertedSignedFloat", testCases, invertRule)
+		invertRule := rules.NewMatchInvertedRule(rules.NewMatchInvertedRule(rules.MatchSignedFloat))
+		runTestInputAndMatches(t, "InvertInvertedMatchSignedFloat", testCases, invertRule)
 	})
 }
 
@@ -1479,10 +1479,10 @@ func TestWord(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, "Word", testCases, rules.Word)
+	runTestInputAndMatches(t, "MatchIdentifier", testCases, rules.MatchIdentifier)
 }
 
-func TestDoubleQuotedString(t *testing.T) {
+func TestMatchDoubleQuotedString(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		// Existing cases...
 		{
@@ -1584,12 +1584,12 @@ func TestDoubleQuotedString(t *testing.T) {
 	}
 
 	// Note: The behavior of escapes (`\"`, `\\`, `\n`, etc.) depends heavily
-	// on the specific implementation of the DoubleQuotedString rule.
+	// on the specific implementation of the MatchDoubleQuotedString rule.
 	// Adjust expected matches based on the actual rule logic.
-	runTestInputAndMatches(t, "DoubleQuotedString", testCases, rules.DoubleQuotedString)
+	runTestInputAndMatches(t, "MatchDoubleQuotedString", testCases, rules.MatchDoubleQuotedString)
 }
 
-func TestSingleQuotedString(t *testing.T) {
+func TestMatchSingleQuotedString(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		// Existing cases...
 		{
@@ -1690,12 +1690,12 @@ func TestSingleQuotedString(t *testing.T) {
 		},
 	}
 	// Note: The behavior of escapes (`\'`, `\\`, `\n`, etc.) depends heavily
-	// on the specific implementation of the SingleQuotedString rule.
+	// on the specific implementation of the MatchSingleQuotedString rule.
 	// Adjust expected matches based on the actual rule logic.
-	runTestInputAndMatches(t, "SingleQuotedString", testCases, rules.SingleQuotedString)
+	runTestInputAndMatches(t, "MatchSingleQuotedString", testCases, rules.MatchSingleQuotedString)
 }
 
-func TestDoubleQuotedFormattedString(t *testing.T) {
+func TestMatchEscapedDoubleQuotedString(t *testing.T) {
 	// This rule likely implies more complex escape handling (like C printf)
 	testCases := []inputAndMatchesCase{
 		// Existing cases...
@@ -1803,10 +1803,10 @@ func TestDoubleQuotedFormattedString(t *testing.T) {
 	}
 	// Note: The exact behavior of formatted strings depends heavily on which
 	// escape sequences are supported. Adjust expectations accordingly.
-	runTestInputAndMatches(t, "DoubleQuotedFormattedString", testCases, rules.DoubleQuotedFormattedString)
+	runTestInputAndMatches(t, "MatchEscapedDoubleQuotedString", testCases, rules.MatchEscapedDoubleQuotedString)
 }
 
-func TestInlineComment(t *testing.T) {
+func TestMatchInlineComment(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		// Existing cases...
 		{
@@ -1897,10 +1897,10 @@ func TestInlineComment(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, "InlineComment", testCases, rules.InlineComment)
+	runTestInputAndMatches(t, "MatchInlineComment", testCases, rules.MatchInlineComment)
 }
 
-func TestSlashStarComment(t *testing.T) {
+func TestMatchSlashStarComment(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		// Existing cases...
 		{
@@ -2001,7 +2001,7 @@ func TestSlashStarComment(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, "SlashStarComment", testCases, rules.SlashStarComment)
+	runTestInputAndMatches(t, "MatchSlashStarComment", testCases, rules.MatchSlashStarComment)
 }
 
 func TestLiteralMatch(t *testing.T) {
@@ -2107,12 +2107,12 @@ func TestLiteralMatch(t *testing.T) {
 		},
 	}
 
-	matchDefKeywordRule := rules.NewLiteralMatch("abc")
+	matchDefKeywordRule := rules.NewMatchString("abc")
 	runTestInputAndMatches(t, "LiteralMatch", testCases, matchDefKeywordRule)
 
 	// Test with empty literal
 	t.Run("LiteralMatch_Empty", func(t *testing.T) {
-		emptyLiteralRule := rules.NewLiteralMatch("")
+		emptyLiteralRule := rules.NewMatchString("")
 		testCasesEmpty := []inputAndMatchesCase{
 			{
 				Input:       "",
@@ -2245,12 +2245,12 @@ func TestCaseInsensitiveLiteralMatch(t *testing.T) {
 		},
 	}
 
-	matchDefKeywordRule := rules.NewCaseInsensitiveLiteralMatch("abc")
+	matchDefKeywordRule := rules.NewMatchStringIgnoreCase("abc")
 	runTestInputAndMatches(t, "CaseInsensitiveLiteralMatch", testCases, matchDefKeywordRule)
 
 	// Test with empty literal
 	t.Run("CaseInsensitiveLiteralMatch_Empty", func(t *testing.T) {
-		emptyLiteralRule := rules.NewCaseInsensitiveLiteralMatch("")
+		emptyLiteralRule := rules.NewMatchStringIgnoreCase("")
 		testCasesEmpty := []inputAndMatchesCase{
 			{
 				Input:       "",
@@ -2275,7 +2275,7 @@ func TestCaseInsensitiveLiteralMatch(t *testing.T) {
 func TestAlways(t *testing.T) {
 	// Existing sub-tests...
 
-	// Destructive cases for Invert(Always...)
+	// Destructive cases for NewMatchInvertedRule(Always...)
 	t.Run("InvertReject", func(t *testing.T) {
 		testCases := []inputAndMatchesCase{
 			// Existing cases...
@@ -2286,7 +2286,7 @@ func TestAlways(t *testing.T) {
 			},
 			{
 				Input:       "abc",
-				Matches:     []string{"abc"}, // Invert(Reject) should accept everything non-EOF
+				Matches:     []string{"abc"}, // NewMatchInvertedRule(Reject) should accept everything non-EOF
 				Description: "Simple text",
 			},
 			{
@@ -2306,11 +2306,11 @@ func TestAlways(t *testing.T) {
 				Description: "InvertReject with space only",
 			},
 		}
-		// Invert(AlwaysReject) should accept any single rune and continue, effectively consuming the whole input as one token.
+		// NewMatchInvertedRule(Reject) should accept any single rune and continue, effectively consuming the whole input as one token.
 		// The runner logic might split this differently based on how Accept works.
 		// Let's assume the runner's Accept logic (`j=j-1`) doesn't apply well here,
-		// and Invert(AlwaysReject) effectively acts like "match until EOF".
-		runTestInputAndMatches(t, "InvertReject", testCases, rules.Invert(rules.AlwaysReject))
+		// and NewMatchInvertedRule(Reject) effectively acts like "match until EOF".
+		runTestInputAndMatches(t, "InvertReject", testCases, rules.NewMatchInvertedRule(rules.RejectCurrent))
 	})
 
 	t.Run("InvertContinue", func(t *testing.T) {
@@ -2323,7 +2323,7 @@ func TestAlways(t *testing.T) {
 			},
 			{
 				Input:       "abc",
-				Matches:     nil, // Invert(Continue) should still be Continue? Or Reject? Assume Reject.
+				Matches:     nil, // NewMatchInvertedRule(Continue) should still be Continue? Or Reject? Assume Reject.
 				Description: "Simple text",
 			},
 			{
@@ -2338,10 +2338,10 @@ func TestAlways(t *testing.T) {
 				Description: "InvertContinue with space",
 			},
 		}
-		// Invert(AlwaysContinue) is tricky. If Continue means "need more input",
+		// NewMatchInvertedRule(Continue) is tricky. If Continue means "need more input",
 		// inverting it might mean "don't need more input", which could be Accept or Reject.
 		// Let's assume it becomes Reject (fails immediately).
-		runTestInputAndMatches(t, "InvertContinue", testCases, rules.Invert(rules.AlwaysContinue))
+		runTestInputAndMatches(t, "InvertContinue", testCases, rules.NewMatchInvertedRule(rules.MatchAnyCharacter))
 	})
 
 	t.Run("InvertAccept", func(t *testing.T) {
@@ -2354,7 +2354,7 @@ func TestAlways(t *testing.T) {
 			},
 			{
 				Input:       "abc",
-				Matches:     nil, // Invert(Accept) should reject immediately.
+				Matches:     nil, // NewMatchInvertedRule(Accept) should reject immediately.
 				Description: "Simple text",
 			},
 			{
@@ -2369,17 +2369,17 @@ func TestAlways(t *testing.T) {
 				Description: "InvertAccept with space",
 			},
 		}
-		// Invert(AlwaysAccept) should reject immediately.
-		runTestInputAndMatches(t, "InvertAccept", testCases, rules.Invert(rules.AlwaysAccept))
+		// NewMatchInvertedRule(AcceptCurrentAndStop) should reject immediately.
+		runTestInputAndMatches(t, "InvertAccept", testCases, rules.NewMatchInvertedRule(rules.AcceptCurrentAndStop))
 	})
 }
 
 func TestCompose(t *testing.T) {
 	// Rule: Compose(Caseless("ORDER"), Whitespace, Caseless("BY"))
-	orderByRule := rules.Compose(
-		rules.NewCaseInsensitiveLiteralMatch("ORDER"),
-		rules.Whitespace,
-		rules.NewCaseInsensitiveLiteralMatch("BY"),
+	orderByRule := rules.NewMatchRuleSequence(
+		rules.NewMatchStringIgnoreCase("ORDER"),
+		rules.MatchWhitespace,
+		rules.NewMatchStringIgnoreCase("BY"),
 	)
 
 	testCases := []inputAndMatchesCase{
@@ -2466,37 +2466,37 @@ func TestCompose(t *testing.T) {
 
 	// Test composing problematic rules
 	t.Run("Compose_Always", func(t *testing.T) {
-		// Compose(Literal("A"), AlwaysContinue, Literal("B")) -> Should never match B
-		composeContinue := rules.Compose(rules.NewLiteralMatch("A"), rules.AlwaysContinue, rules.NewLiteralMatch("B"))
+		// Compose(Literal("A"), Continue, Literal("B")) -> Should never match B
+		composeContinue := rules.NewMatchRuleSequence(rules.NewMatchString("A"), rules.MatchAnyCharacter, rules.NewMatchString("B"))
 		runTestInputAndMatches(t, "ComposeContinue", []inputAndMatchesCase{
-			{"AB", nil, "Compose with AlwaysContinue"},
-			{"A B", nil, "Compose with AlwaysContinue space"},
+			{"AB", nil, "Compose with Continue"},
+			{"A B", nil, "Compose with Continue space"},
 		}, composeContinue)
 
-		// Compose(Literal("A"), AlwaysReject, Literal("B")) -> Should reject after A
-		composeReject := rules.Compose(rules.NewLiteralMatch("A"), rules.AlwaysReject, rules.NewLiteralMatch("B"))
+		// Compose(Literal("A"), RejectCurrent, Literal("B")) -> Should reject after A
+		composeReject := rules.NewMatchRuleSequence(rules.NewMatchString("A"), rules.RejectCurrent, rules.NewMatchString("B"))
 		runTestInputAndMatches(t, "ComposeReject", []inputAndMatchesCase{
-			{"AB", nil, "Compose with AlwaysReject"},
-			{"A B", nil, "Compose with AlwaysReject space"},
+			{"AB", nil, "Compose with Reject"},
+			{"A B", nil, "Compose with Reject space"},
 		}, composeReject)
 
-		// Compose(Literal("A"), AlwaysAccept, Literal("B")) -> Should accept A, then fail on B?
+		// Compose(Literal("A"), AcceptCurrentAndStop, Literal("B")) -> Should accept A, then fail on B?
 		// This depends heavily on how Compose handles intermediate Accepts. Assume it fails.
-		composeAccept := rules.Compose(rules.NewLiteralMatch("A"), rules.AlwaysAccept, rules.NewLiteralMatch("B"))
+		composeAccept := rules.NewMatchRuleSequence(rules.NewMatchString("A"), rules.AcceptCurrentAndStop, rules.NewMatchString("B"))
 		runTestInputAndMatches(t, "ComposeAccept", []inputAndMatchesCase{
-			{"AB", nil, "Compose with AlwaysAccept"},        // A matches, AlwaysAccept matches "", B fails
-			{"A B", nil, "Compose with AlwaysAccept space"}, // A matches, AlwaysAccept matches "", space fails B
+			{"AB", nil, "Compose with AcceptCurrentAndStop"},        // A matches, AcceptCurrentAndStop matches "", B fails
+			{"A B", nil, "Compose with AcceptCurrentAndStop space"}, // A matches, AcceptCurrentAndStop matches "", space fails B
 		}, composeAccept)
 	})
 }
 
 func TestAnyMatch(t *testing.T) {
 	// Rules: Caseless("ABC"), Caseless("DEF"), Caseless("GHI"), Caseless("ABCDEF") - note order
-	anyMatchRule := rules.NewMatchAnyOf(
-		rules.NewCaseInsensitiveLiteralMatch("ABC"),
-		rules.NewCaseInsensitiveLiteralMatch("DEF"),
-		rules.NewCaseInsensitiveLiteralMatch("GHI"),
-		rules.NewCaseInsensitiveLiteralMatch("ABCDEF"), // Longer match listed later
+	anyMatchRule := rules.NewMatchAnyRule(
+		rules.NewMatchStringIgnoreCase("ABC"),
+		rules.NewMatchStringIgnoreCase("DEF"),
+		rules.NewMatchStringIgnoreCase("GHI"),
+		rules.NewMatchStringIgnoreCase("ABCDEF"), // Longer match listed later
 	)
 
 	testCases := []inputAndMatchesCase{
@@ -2563,10 +2563,10 @@ func TestAnyMatch(t *testing.T) {
 
 	// Test with overlapping/prefix rules where longer is first
 	t.Run("AnyMatch_LongerFirst", func(t *testing.T) {
-		longerFirstRule := rules.NewMatchAnyOf(
-			rules.NewCaseInsensitiveLiteralMatch("ABCDEF"),
-			rules.NewCaseInsensitiveLiteralMatch("ABC"), // Shorter prefix listed later
-			rules.NewCaseInsensitiveLiteralMatch("DEF"),
+		longerFirstRule := rules.NewMatchAnyRule(
+			rules.NewMatchStringIgnoreCase("ABCDEF"),
+			rules.NewMatchStringIgnoreCase("ABC"), // Shorter prefix listed later
+			rules.NewMatchStringIgnoreCase("DEF"),
 		)
 		testCasesLonger := []inputAndMatchesCase{
 			{
@@ -2598,7 +2598,7 @@ func TestAnyMatch(t *testing.T) {
 
 	// Test with empty list of rules
 	t.Run("AnyMatch_EmptyList", func(t *testing.T) {
-		emptyAny := rules.NewMatchAnyOf()
+		emptyAny := rules.NewMatchAnyRule()
 		testCasesEmpty := []inputAndMatchesCase{
 			{"abc", nil, "Empty rule list"},
 			{"", nil, "Empty rule list empty input"},
