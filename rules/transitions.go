@@ -18,17 +18,17 @@ func RejectCurrentAndStop(r rune) (textlexer.Rule, textlexer.State) {
 // current match, but the match is still valid up to that point. The scanner
 // might move back one position.
 func PushBackCurrentAndAccept(r rune) (textlexer.Rule, textlexer.State) {
-	return AcceptCurrentAndStop, textlexer.StatePushBack
+	return Backtrack(1, textlexer.StateAccept)(r)
 }
 
-// BacktrackAndAccept is a rule that allows pushing-back by n positions, and
-// accepting the final position after backtracking.
-func BacktrackAndAccept(n int) textlexer.Rule {
+// Backtrack returns a rule that asks the scanner to move back `n` positions in
+// the input stream, and then continue with the specified state.
+func Backtrack(n int, state textlexer.State) textlexer.Rule {
 	return func(r rune) (textlexer.Rule, textlexer.State) {
 		if n > 0 {
-			return BacktrackAndAccept(n - 1), textlexer.StatePushBack
+			return Backtrack(n-1, state), textlexer.StatePushBack
 		}
-		return AcceptCurrentAndStop, textlexer.StatePushBack
+		return nil, state
 	}
 }
 

@@ -2,7 +2,6 @@ package rules_test
 
 import (
 	"fmt"
-	stdlog "log"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -20,7 +19,7 @@ type inputAndMatchesCase struct {
 	Description string
 }
 
-func TestMatchUnsignedInteger(t *testing.T) {
+func TestUnsignedInteger(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
 			Input:       "",
@@ -98,10 +97,10 @@ func TestMatchUnsignedInteger(t *testing.T) {
 			Description: "Extremely long unsigned integer",
 		},
 	}
-	runTestInputAndMatches(t, "MatchUnsignedInteger", testCases, rules.MatchUnsignedInteger)
+	runTestInputAndMatches(t, "UnsignedInteger", testCases, rules.UnsignedInteger)
 }
 
-func TestMatchSignedInteger(t *testing.T) {
+func TestSignedInteger(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
 			Input:       "",
@@ -195,10 +194,10 @@ func TestMatchSignedInteger(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, "MatchSignedInteger", testCases, rules.MatchSignedInteger)
+	runTestInputAndMatches(t, "SignedInteger", testCases, rules.SignedInteger)
 }
 
-func TestMatchUnsignedFloat(t *testing.T) {
+func TestUnsignedFloat(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
 			Input:       "",
@@ -242,8 +241,18 @@ func TestMatchUnsignedFloat(t *testing.T) {
 		},
 		{
 			Input:       "123.",
-			Matches:     nil,
-			Description: "Number with trailing decimal point (not a valid float)",
+			Matches:     []string{"123."},
+			Description: "Float with trailing dot",
+		},
+		{
+			Input:       "A123.B",
+			Matches:     []string{"123."},
+			Description: "Float with letter prefix and trailing dot",
+		},
+		{
+			Input:       "0.",
+			Matches:     []string{"0."},
+			Description: "Float with zero and trailing dot",
 		},
 		{
 			Input:       "123 .45 6",
@@ -287,12 +296,12 @@ func TestMatchUnsignedFloat(t *testing.T) {
 		},
 		{
 			Input:       "1..2",
-			Matches:     []string{".2"},
-			Description: "Digit followed by double dot and digit",
+			Matches:     []string{"1.", ".2"},
+			Description: "Double dot between digits",
 		},
 		{
 			Input:       "1.a",
-			Matches:     nil,
+			Matches:     []string{"1."},
 			Description: "Digit, dot, letter",
 		},
 		{
@@ -311,16 +320,16 @@ func TestMatchUnsignedFloat(t *testing.T) {
 			Description: "Positive sign before float without leading zero",
 		},
 		{
-			Input:       "1.2.3",
+			Input:       "1.2.3.",
 			Matches:     []string{"1.2", ".3"},
 			Description: "Multiple decimal points",
 		},
 	}
 
-	runTestInputAndMatches(t, "MatchUnsignedFloat", testCases, rules.MatchUnsignedFloat)
+	runTestInputAndMatches(t, "UnsignedFloat", testCases, rules.UnsignedFloat)
 }
 
-func TestMatchSignedFloat(t *testing.T) {
+func TestSignedFloat(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
 			Input:       "",
@@ -419,7 +428,7 @@ func TestMatchSignedFloat(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, "MatchSignedFloat", testCases, rules.MatchSignedFloat)
+	runTestInputAndMatches(t, "SignedFloat", testCases, rules.SignedFloat)
 }
 
 func TestNumeric(t *testing.T) {
@@ -506,10 +515,10 @@ func TestNumeric(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, "Numeric", testCases, rules.MatchSignedNumeric)
+	runTestInputAndMatches(t, "Numeric", testCases, rules.SignedNumeric)
 }
 
-func TestMatchUnsignedNumeric(t *testing.T) {
+func TestUnsignedNumeric(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
 			Input:       "",
@@ -573,7 +582,7 @@ func TestMatchUnsignedNumeric(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, "MatchUnsignedNumeric", testCases, rules.MatchUnsignedNumeric)
+	runTestInputAndMatches(t, "UnsignedNumeric", testCases, rules.UnsignedNumeric)
 }
 
 func TestWhitespace(t *testing.T) {
@@ -630,7 +639,7 @@ func TestWhitespace(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, "Whitespace", testCases, rules.MatchWhitespace)
+	runTestInputAndMatches(t, "Whitespace", testCases, rules.Whitespace)
 }
 
 func TestNewMatchInvertedRule(t *testing.T) {
@@ -680,11 +689,11 @@ func TestNewMatchInvertedRule(t *testing.T) {
 			},
 		}
 
-		invertRule := rules.NewMatchInvertedRule(rules.MatchWhitespace)
+		invertRule := rules.NewMatchInvertedRule(rules.Whitespace)
 		runTestInputAndMatches(t, "InvertWhitespace", testCases, invertRule)
 	})
 
-	t.Run("InvertMatchSignedInteger", func(t *testing.T) {
+	t.Run("InvertSignedInteger", func(t *testing.T) {
 		testCases := []inputAndMatchesCase{
 			{
 				Input:       "",
@@ -728,11 +737,11 @@ func TestNewMatchInvertedRule(t *testing.T) {
 			},
 		}
 
-		invertRule := rules.NewMatchInvertedRule(rules.MatchSignedInteger)
-		runTestInputAndMatches(t, "InvertMatchSignedInteger", testCases, invertRule)
+		invertRule := rules.NewMatchInvertedRule(rules.SignedInteger)
+		runTestInputAndMatches(t, "InvertSignedInteger", testCases, invertRule)
 	})
 
-	t.Run("InvertMatchSignedFloat", func(t *testing.T) {
+	t.Run("InvertSignedFloat", func(t *testing.T) {
 		testCases := []inputAndMatchesCase{
 			{
 				Input:       "",
@@ -786,8 +795,8 @@ func TestNewMatchInvertedRule(t *testing.T) {
 			},
 		}
 
-		invertRule := rules.NewMatchInvertedRule(rules.MatchSignedFloat)
-		runTestInputAndMatches(t, "InvertMatchSignedFloat", testCases, invertRule)
+		invertRule := rules.NewMatchInvertedRule(rules.SignedFloat)
+		runTestInputAndMatches(t, "InvertSignedFloat", testCases, invertRule)
 	})
 
 	t.Run("InvertLiteralMatch", func(t *testing.T) {
@@ -896,7 +905,7 @@ func TestNewMatchInvertedRule(t *testing.T) {
 		runTestInputAndMatches(t, "InvertCaselessLiteralMatch", testCases, invertRule)
 	})
 
-	t.Run("InvertInvertedMatchSignedFloat", func(t *testing.T) {
+	t.Run("InvertInvertedSignedFloat", func(t *testing.T) {
 		testCases := []inputAndMatchesCase{
 			{
 				Input:       "",
@@ -940,8 +949,8 @@ func TestNewMatchInvertedRule(t *testing.T) {
 			},
 		}
 
-		invertRule := rules.NewMatchInvertedRule(rules.NewMatchInvertedRule(rules.MatchSignedFloat))
-		runTestInputAndMatches(t, "InvertInvertedMatchSignedFloat", testCases, invertRule)
+		invertRule := rules.NewMatchInvertedRule(rules.NewMatchInvertedRule(rules.SignedFloat))
+		runTestInputAndMatches(t, "InvertInvertedSignedFloat", testCases, invertRule)
 	})
 }
 
@@ -984,7 +993,7 @@ func TestWord(t *testing.T) {
 		},
 		{
 			Input:       "word_with_underscore",
-			Matches:     []string{"word", "with", "underscore"},
+			Matches:     []string{"word_with_underscore"},
 			Description: "Word with underscore",
 		},
 		{
@@ -1004,10 +1013,10 @@ func TestWord(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, "MatchIdentifier", testCases, rules.MatchIdentifier)
+	runTestInputAndMatches(t, "Identifier", testCases, rules.Identifier)
 }
 
-func TestMatchDoubleQuotedString(t *testing.T) {
+func TestDoubleQuotedString(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
 			Input:       ``,
@@ -1076,10 +1085,10 @@ func TestMatchDoubleQuotedString(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, "MatchDoubleQuotedString", testCases, rules.MatchDoubleQuotedString)
+	runTestInputAndMatches(t, "DoubleQuotedString", testCases, rules.DoubleQuotedString)
 }
 
-func TestMatchSingleQuotedString(t *testing.T) {
+func TestSingleQuotedString(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
 			Input:       ``,
@@ -1148,10 +1157,10 @@ func TestMatchSingleQuotedString(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, "MatchSingleQuotedString", testCases, rules.MatchSingleQuotedString)
+	runTestInputAndMatches(t, "SingleQuotedString", testCases, rules.SingleQuotedString)
 }
 
-func TestMatchEscapedDoubleQuotedString(t *testing.T) {
+func TestDoubleQuotedEscapedString(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
 			Input:       ``,
@@ -1210,10 +1219,10 @@ func TestMatchEscapedDoubleQuotedString(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, "MatchEscapedDoubleQuotedString", testCases, rules.MatchEscapedDoubleQuotedString)
+	runTestInputAndMatches(t, "DoubleQuotedEscapedString", testCases, rules.DoubleQuotedEscapedString)
 }
 
-func TestMatchInlineComment(t *testing.T) {
+func TestDoubleSlashComment(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
 			Input:       "",
@@ -1277,10 +1286,10 @@ func TestMatchInlineComment(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, "MatchInlineComment", testCases, rules.MatchInlineComment)
+	runTestInputAndMatches(t, "DoubleSlashComment", testCases, rules.DoubleSlashComment)
 }
 
-func TestMatchSlashStarComment(t *testing.T) {
+func TestSlashStarComment(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
 			Input:       "",
@@ -1349,7 +1358,7 @@ func TestMatchSlashStarComment(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, "MatchSlashStarComment", testCases, rules.MatchSlashStarComment)
+	runTestInputAndMatches(t, "SlashStarComment", testCases, rules.SlashStarComment)
 }
 
 func TestLiteralMatch(t *testing.T) {
@@ -1529,7 +1538,7 @@ func TestAlways(t *testing.T) {
 			},
 		}
 
-		runTestInputAndMatches(t, "InvertContinue", testCases, rules.NewMatchInvertedRule(rules.MatchAnyCharacter))
+		runTestInputAndMatches(t, "InvertContinue", testCases, rules.NewMatchInvertedRule(rules.AnyUntilEOF))
 	})
 
 	t.Run("InvertAccept", func(t *testing.T) {
@@ -1562,7 +1571,7 @@ func TestAlways(t *testing.T) {
 func TestCompose(t *testing.T) {
 	orderByRule := rules.NewMatchRuleSequence(
 		rules.NewMatchStringIgnoreCase("ORDER"),
-		rules.MatchWhitespace,
+		rules.Whitespace,
 		rules.NewMatchStringIgnoreCase("BY"),
 	)
 
@@ -1629,7 +1638,7 @@ func TestCompose(t *testing.T) {
 	t.Run("Compose_Always", func(t *testing.T) {
 		composeContinue := rules.NewMatchRuleSequence(
 			rules.NewMatchString("A"),
-			rules.MatchAnyCharacter,
+			rules.AnyUntilEOF,
 			rules.NewMatchString("B"),
 		)
 
@@ -1638,7 +1647,7 @@ func TestCompose(t *testing.T) {
 			"ComposeContinue",
 			[]inputAndMatchesCase{
 				{"AB", nil, "Compose with Continue"},
-				{"A B", nil, "Compose with Continue space"},
+				{"A B", []string{"A B"}, "Compose with Continue space"},
 			},
 			composeContinue,
 		)
@@ -1773,7 +1782,7 @@ func TestAnyMatch(t *testing.T) {
 	})
 }
 
-func TestMatchIdentifierWithUnderscore(t *testing.T) {
+func TestIdentifier(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
 			Input:       "",
@@ -1827,10 +1836,10 @@ func TestMatchIdentifierWithUnderscore(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, "MatchIdentifierWithUnderscore", testCases, rules.MatchIdentifierWithUnderscore)
+	runTestInputAndMatches(t, "Identifier", testCases, rules.Identifier)
 }
 
-func TestMatchHexInteger(t *testing.T) {
+func TestHexInteger(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
 			Input:       "",
@@ -1894,10 +1903,10 @@ func TestMatchHexInteger(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, "MatchHexInteger", testCases, rules.MatchHexInteger)
+	runTestInputAndMatches(t, "HexInteger", testCases, rules.HexInteger)
 }
 
-func TestMatchBinaryInteger(t *testing.T) {
+func TestBinaryInteger(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
 			Input:       "",
@@ -1951,10 +1960,10 @@ func TestMatchBinaryInteger(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, "MatchBinaryInteger", testCases, rules.MatchBinaryInteger)
+	runTestInputAndMatches(t, "BinaryInteger", testCases, rules.BinaryInteger)
 }
 
-func TestMatchOctalInteger(t *testing.T) {
+func TestOctalInteger(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
 			Input:       "",
@@ -2008,10 +2017,10 @@ func TestMatchOctalInteger(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, "MatchOctalInteger", testCases, rules.MatchOctalInteger)
+	runTestInputAndMatches(t, "OctalInteger", testCases, rules.OctalInteger)
 }
 
-func TestMatchHashComment(t *testing.T) {
+func TestHashComment(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
 			Input:       "",
@@ -2070,10 +2079,10 @@ func TestMatchHashComment(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, "MatchHashComment", testCases, rules.MatchHashComment)
+	runTestInputAndMatches(t, "HashComment", testCases, rules.HashComment)
 }
 
-func TestMatchExceptEOF(t *testing.T) {
+func TestAnyUntilEOF(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
 			Input:       "",
@@ -2097,10 +2106,10 @@ func TestMatchExceptEOF(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, "MatchExceptEOF", testCases, rules.MatchExceptEOF)
+	runTestInputAndMatches(t, "AnyUntilEOF", testCases, rules.AnyUntilEOF)
 }
 
-func TestMatchExceptEOL(t *testing.T) {
+func TestAnyUntilEOL(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
 			Input:       "",
@@ -2134,10 +2143,10 @@ func TestMatchExceptEOL(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, "MatchExceptEOL", testCases, rules.MatchExceptEOL)
+	runTestInputAndMatches(t, "AnyUntilEOL", testCases, rules.AnyUntilEOL)
 }
 
-func TestMatchBasicMathOperator(t *testing.T) {
+func TestBasicMathOperator(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
 			Input:       "",
@@ -2186,11 +2195,11 @@ func TestMatchBasicMathOperator(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, "MatchBasicMathOperator", testCases, rules.MatchBasicMathOperator)
+	runTestInputAndMatches(t, "BasicMathOperator", testCases, rules.BasicMathOperator)
 }
 
 func TestLogicalOperators(t *testing.T) {
-	t.Run("MatchLogicalAnd", func(t *testing.T) {
+	t.Run("LogicalAnd", func(t *testing.T) {
 		testCases := []inputAndMatchesCase{
 			{
 				Input:       "",
@@ -2213,10 +2222,10 @@ func TestLogicalOperators(t *testing.T) {
 				Description: "Single ampersand",
 			},
 		}
-		runTestInputAndMatches(t, "MatchLogicalAnd", testCases, rules.MatchLogicalAnd)
+		runTestInputAndMatches(t, "LogicalAnd", testCases, rules.LogicalAnd)
 	})
 
-	t.Run("MatchLogicalOr", func(t *testing.T) {
+	t.Run("LogicalOr", func(t *testing.T) {
 		testCases := []inputAndMatchesCase{
 			{
 				Input:       "",
@@ -2239,12 +2248,12 @@ func TestLogicalOperators(t *testing.T) {
 				Description: "Single pipe",
 			},
 		}
-		runTestInputAndMatches(t, "MatchLogicalOr", testCases, rules.MatchLogicalOr)
+		runTestInputAndMatches(t, "LogicalOr", testCases, rules.LogicalOr)
 	})
 }
 
 func TestArrowOperators(t *testing.T) {
-	t.Run("MatchArrow", func(t *testing.T) {
+	t.Run("Arrow", func(t *testing.T) {
 		testCases := []inputAndMatchesCase{
 			{
 				Input:       "",
@@ -2267,10 +2276,10 @@ func TestArrowOperators(t *testing.T) {
 				Description: "Minus only",
 			},
 		}
-		runTestInputAndMatches(t, "MatchArrow", testCases, rules.MatchArrow)
+		runTestInputAndMatches(t, "Arrow", testCases, rules.Arrow)
 	})
 
-	t.Run("MatchFatArrow", func(t *testing.T) {
+	t.Run("FatArrow", func(t *testing.T) {
 		testCases := []inputAndMatchesCase{
 			{
 				Input:       "",
@@ -2293,7 +2302,7 @@ func TestArrowOperators(t *testing.T) {
 				Description: "Equals only",
 			},
 		}
-		runTestInputAndMatches(t, "MatchFatArrow", testCases, rules.MatchFatArrow)
+		runTestInputAndMatches(t, "FatArrow", testCases, rules.FatArrow)
 	})
 }
 
@@ -2326,31 +2335,31 @@ func TestSingleCharacterAcceptors(t *testing.T) {
 		})
 	}
 
-	testSingleCharacter("AcceptLParen", rules.AcceptLParen, '(')
-	testSingleCharacter("AcceptRParen", rules.AcceptRParen, ')')
-	testSingleCharacter("AcceptLBrace", rules.AcceptLBrace, '{')
-	testSingleCharacter("AcceptRBrace", rules.AcceptRBrace, '}')
-	testSingleCharacter("AcceptLBracket", rules.AcceptLBracket, '[')
-	testSingleCharacter("AcceptRBracket", rules.AcceptRBracket, ']')
-	testSingleCharacter("AcceptLAngle", rules.AcceptLAngle, '<')
-	testSingleCharacter("AcceptRAngle", rules.AcceptRAngle, '>')
-	testSingleCharacter("AcceptComma", rules.AcceptComma, ',')
-	testSingleCharacter("AcceptColon", rules.AcceptColon, ':')
-	testSingleCharacter("AcceptSemicolon", rules.AcceptSemicolon, ';')
-	testSingleCharacter("AcceptPeriod", rules.AcceptPeriod, '.')
-	testSingleCharacter("AcceptPlus", rules.AcceptPlus, '+')
-	testSingleCharacter("AcceptMinus", rules.AcceptMinus, '-')
-	testSingleCharacter("AcceptStar", rules.AcceptStar, '*')
-	testSingleCharacter("AcceptSlash", rules.AcceptSlash, '/')
-	testSingleCharacter("AcceptPercent", rules.AcceptPercent, '%')
-	testSingleCharacter("AcceptEqual", rules.AcceptEqual, '=')
-	testSingleCharacter("AcceptExclamation", rules.AcceptExclamation, '!')
-	testSingleCharacter("AcceptPipe", rules.AcceptPipe, '|')
-	testSingleCharacter("AcceptAmpersand", rules.AcceptAmpersand, '&')
-	testSingleCharacter("AcceptQuestionMark", rules.AcceptQuestionMark, '?')
+	testSingleCharacter("AcceptLParen", rules.LParen, '(')
+	testSingleCharacter("AcceptRParen", rules.RParen, ')')
+	testSingleCharacter("AcceptLBrace", rules.LBrace, '{')
+	testSingleCharacter("AcceptRBrace", rules.RBrace, '}')
+	testSingleCharacter("AcceptLBracket", rules.LBracket, '[')
+	testSingleCharacter("AcceptRBracket", rules.RBracket, ']')
+	testSingleCharacter("AcceptLAngle", rules.LAngle, '<')
+	testSingleCharacter("AcceptRAngle", rules.RAngle, '>')
+	testSingleCharacter("AcceptComma", rules.Comma, ',')
+	testSingleCharacter("AcceptColon", rules.Colon, ':')
+	testSingleCharacter("AcceptSemicolon", rules.Semicolon, ';')
+	testSingleCharacter("AcceptPeriod", rules.Period, '.')
+	testSingleCharacter("AcceptPlus", rules.Plus, '+')
+	testSingleCharacter("AcceptMinus", rules.Minus, '-')
+	testSingleCharacter("AcceptStar", rules.Star, '*')
+	testSingleCharacter("AcceptSlash", rules.Slash, '/')
+	testSingleCharacter("AcceptPercent", rules.Percent, '%')
+	testSingleCharacter("AcceptEqual", rules.Equals, '=')
+	testSingleCharacter("AcceptExclamation", rules.Exclamation, '!')
+	testSingleCharacter("AcceptPipe", rules.Pipe, '|')
+	testSingleCharacter("AcceptAmpersand", rules.Ampersand, '&')
+	testSingleCharacter("AcceptQuestionMark", rules.QuestionMark, '?')
 }
 
-func TestAcceptAnyParen(t *testing.T) {
+func TestAcceptParen(t *testing.T) {
 	testCases := []inputAndMatchesCase{
 		{
 			Input:       "",
@@ -2383,7 +2392,7 @@ func TestAcceptAnyParen(t *testing.T) {
 			Description: "Non-parenthesis bracket",
 		},
 	}
-	runTestInputAndMatches(t, "AcceptAnyParen", testCases, rules.AcceptAnyParen)
+	runTestInputAndMatches(t, "AcceptParen", testCases, rules.Paren)
 }
 
 func TestNewMatchExceptString(t *testing.T) {
@@ -2436,14 +2445,11 @@ func TestNewMatchStartingWithString(t *testing.T) {
 	matchStartingWithHello := rules.NewMatchStartingWithString(
 		"Hello",
 		func(r rune) (textlexer.Rule, textlexer.State) {
-			stdlog.Printf("SECOND: %q", r)
 			if rules.IsCommonWhitespace(r) || rules.IsEOF(r) {
-				stdlog.Printf("SECOND: IS EOF or whitespace")
 				return rules.PushBackCurrentAndAccept(r)
 			}
 
-			stdlog.Printf("SECOND: NOT EOF or whitespace")
-			return rules.MatchUntilCommonWhitespaceOrEOF(r)
+			return rules.AnyUntilWhitespaceOrEOF(r)
 		},
 	)
 
@@ -2518,7 +2524,7 @@ func TestNewCharacterMatcher(t *testing.T) {
 	runTestInputAndMatches(t, "NewCharacterMatcher", testCases, matchAt)
 }
 
-func TestMatchUntilCommonWhitespaceOrEOF(t *testing.T) {
+func TestAnyUntilWhitespaceOrEOF(t *testing.T) {
 	// This rule has a specific behavior that should be tested
 	testCases := []inputAndMatchesCase{
 		{
@@ -2543,24 +2549,24 @@ func TestMatchUntilCommonWhitespaceOrEOF(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, "MatchUntilCommonWhitespaceOrEOF", testCases, rules.MatchUntilCommonWhitespaceOrEOF)
+	runTestInputAndMatches(t, "AnyUntilWhitespaceOrEOF", testCases, rules.AnyUntilWhitespaceOrEOF)
 }
 
 func TestNewMatchRuleSequence(t *testing.T) {
 
 	// Test a more complex rule sequence
 	complexSequence := rules.NewMatchRuleSequence(
-		rules.MatchZeroOrMoreWhitespaces,
-		rules.AcceptLParen,
-		rules.MatchZeroOrMoreWhitespaces,
-		rules.MatchIdentifier,
-		rules.MatchZeroOrMoreWhitespaces,
-		rules.AcceptComma,
-		rules.MatchZeroOrMoreWhitespaces,
-		rules.MatchUnsignedInteger,
-		rules.MatchZeroOrMoreWhitespaces,
-		rules.AcceptRParen,
-		rules.MatchZeroOrMoreWhitespaces,
+		rules.OptionalWhitespace,
+		rules.LParen,
+		rules.OptionalWhitespace,
+		rules.Identifier,
+		rules.OptionalWhitespace,
+		rules.Comma,
+		rules.OptionalWhitespace,
+		rules.UnsignedInteger,
+		rules.OptionalWhitespace,
+		rules.RParen,
+		rules.OptionalWhitespace,
 	)
 
 	testCases := []inputAndMatchesCase{
@@ -2604,11 +2610,10 @@ func TestNewMatchRuleSequence(t *testing.T) {
 	runTestInputAndMatches(t, "NewMatchRuleSequence_Complex", testCases, complexSequence)
 }
 
-/*
-func TestNewMatchWithLookahead(t *testing.T) {
+func TestNewLookaheadMatcher(t *testing.T) {
 	// Test lookahead functionality with keyword boundaries
 	// This tests if a word is followed by a non-identifier character
-	keywordIf := rules.NewMatchWithLookahead(
+	keywordIf := rules.NewLookaheadMatcher(
 		// Match the keyword "if"
 		rules.NewMatchString("if"),
 
@@ -2622,7 +2627,7 @@ func TestNewMatchWithLookahead(t *testing.T) {
 				return nil, textlexer.StateReject
 			}
 
-			return nil, textlexer.StateAccept
+			return rules.PushBackCurrentAndAccept(r)
 		},
 	)
 
@@ -2684,13 +2689,13 @@ func TestNewMatchWithLookahead(t *testing.T) {
 		},
 	}
 
-	runTestInputAndMatches(t, "NewMatchWithLookahead", testCases, keywordIf)
+	runTestInputAndMatches(t, "NewLookaheadMatcher", testCases, keywordIf)
 
 	// Test lookahead with more complex patterns
 	t.Run("LookaheadComplex", func(t *testing.T) {
 		// Match a number only if followed by a unit (px, em, %)
-		numberWithUnit := rules.NewMatchWithLookahead(
-			rules.MatchUnsignedNumeric,
+		numberWithUnit := rules.NewLookaheadMatcher(
+			rules.UnsignedNumeric,
 
 			rules.NewMatchAnyRule(
 				rules.NewMatchString("px"),
@@ -2747,7 +2752,7 @@ func TestNewMatchWithLookahead(t *testing.T) {
 
 	t.Run("Chained simple rules", func(t *testing.T) {
 		// Match "a" only if followed by "b"
-		chainedLookahead := rules.NewMatchWithLookahead(
+		chainedLookahead := rules.NewLookaheadMatcher(
 			rules.NewMatchString("a"),
 			rules.NewMatchString("b"),
 		)
@@ -2784,13 +2789,13 @@ func TestNewMatchWithLookahead(t *testing.T) {
 	})
 
 	t.Run("Chained Lookahead", func(t *testing.T) {
-		chainedLookahead1 := rules.NewMatchWithLookahead(
+		chainedLookahead1 := rules.NewLookaheadMatcher(
 			rules.NewMatchString("abc"),
 			rules.NewMatchString("123"),
 		)
 
 		runTestInputAndMatches(t,
-			"chainedLookahead1",
+			"single rule chainedLookahead1",
 			[]inputAndMatchesCase{
 				{
 					Input:       "abc123",
@@ -2801,13 +2806,13 @@ func TestNewMatchWithLookahead(t *testing.T) {
 			chainedLookahead1,
 		)
 
-		chainedLookahead2 := rules.NewMatchWithLookahead(
+		chainedLookahead2 := rules.NewLookaheadMatcher(
 			rules.NewMatchString("123"),
 			rules.NewMatchString("def"),
 		)
 
 		runTestInputAndMatches(t,
-			"chainedLookahead2",
+			"single rule chainedLookahead2",
 			[]inputAndMatchesCase{
 				{
 					Input:       "123def",
@@ -2818,7 +2823,7 @@ func TestNewMatchWithLookahead(t *testing.T) {
 			chainedLookahead2,
 		)
 
-		chainedLookahead := rules.NewMatchWithLookahead(
+		chainedLookahead := rules.NewLookaheadMatcher(
 			chainedLookahead1, // "abc" followed by "123"
 			chainedLookahead2, // "123" followed by "def"
 		)
@@ -2867,10 +2872,10 @@ func TestNewMatchWithLookahead(t *testing.T) {
 	// Test nested lookahead
 	t.Run("NestedLookahead", func(t *testing.T) {
 		// Match "a" only if followed by "b" which is followed by "c"
-		nestedLookahead := rules.NewMatchWithLookahead(
+		nestedLookahead := rules.NewLookaheadMatcher(
 			rules.NewMatchString("a"),
 
-			rules.NewMatchWithLookahead(
+			rules.NewLookaheadMatcher(
 				rules.NewMatchString("b"),
 				rules.NewMatchString("c"),
 			),
@@ -2907,7 +2912,6 @@ func TestNewMatchWithLookahead(t *testing.T) {
 		runTestInputAndMatches(t, "NestedLookahead", testCasesNested, nestedLookahead)
 	})
 }
-*/
 
 func runTestInputAndMatches(t *testing.T, ruleType string, testCases []inputAndMatchesCase, initialRule textlexer.Rule) {
 	for ti, tc := range testCases {
@@ -2920,14 +2924,14 @@ func runTestInputAndMatches(t *testing.T, ruleType string, testCases []inputAndM
 			// append the EOF rune to the input
 			input := []rune(tc.Input)
 
-			times := 0
+			iterationCount := 0
 
 			t.Logf("### input: %q", input)
 
 			for current, lookahead := 0, 0; current < len(input); {
 
-				require.True(t, times < outOfControlLimit, "Out of control loop. Aborting after %v iterations", outOfControlLimit)
-				times++
+				require.True(t, iterationCount < outOfControlLimit, "Out of control loop. Aborting after %v iterations", outOfControlLimit)
+				iterationCount++
 
 				// next character
 				var r rune
@@ -2945,7 +2949,7 @@ func runTestInputAndMatches(t *testing.T, ruleType string, testCases []inputAndM
 				// execute the rule
 				rule, state = rule(r)
 
-				t.Logf("### iteration [%02d]: current: %02d, lookahead: %02d, rune: %q, state: %v", times, current, lookahead, r, state)
+				t.Logf("### iteration [%02d]: current: %02d, lookahead: %02d, rune: %q, state: %v", iterationCount, current, lookahead, r, state)
 
 				switch state {
 				case textlexer.StateContinue:
@@ -2993,121 +2997,6 @@ func runTestInputAndMatches(t *testing.T, ruleType string, testCases []inputAndM
 
 				if rules.IsEOF(r) && rule == nil {
 					t.Logf("### EOF reached")
-					break
-				}
-			}
-
-			// check if the number of matches is as expected
-			if len(matches) != len(tc.Matches) {
-				require.Equal(t, len(tc.Matches), len(matches),
-					"Rule: %q, Input: %q, Expected matches: %v, got: %v",
-					ruleType, tc.Input, tc.Matches, matches,
-				)
-			}
-
-			// check if the matches are as expected
-			for i, match := range matches {
-				assert.Equal(t, tc.Matches[i], match,
-					"Rule: %q, Input: %q, Expected match %d: %q, got %q",
-					ruleType, tc.Input, i, tc.Matches[i], match)
-			}
-		})
-	}
-}
-
-func OLDrunTestInputAndMatches(t *testing.T, ruleType string, testCases []inputAndMatchesCase, initialRule textlexer.Rule) {
-	for ti, tc := range testCases {
-		t.Run(fmt.Sprintf("%s_case_%03d_%s", ruleType, ti+1, tc.Description), func(t *testing.T) {
-			var rule textlexer.Rule
-			var state textlexer.State
-
-			var matches []string
-
-			// append the EOF rune to the input
-			input := append([]rune(tc.Input), textlexer.RuneEOF)
-
-			times := 0
-
-			t.Logf("Input: %q", input)
-
-			for current, lookahead := 0, 0; current+lookahead < len(input); {
-				require.True(t, times < outOfControlLimit, "Out of control loop. Aborting after %v iterations", outOfControlLimit)
-				times++
-
-				// next character
-				r := input[current+lookahead]
-
-				t.Logf("iteration: %d ## current: %d, lookahead: %d, rune: %q", times, current, lookahead, r)
-
-				if rule == nil {
-					// reset the rule to the initial rule
-					rule = initialRule
-				}
-
-				// execute the rule
-				rule, state = rule(r)
-
-				t.Logf("iteration: %d -> rule(%q) => %v", times, r, state)
-
-				switch state {
-				case textlexer.StateContinue:
-					lookahead = lookahead + 1
-
-				case textlexer.StateAccept:
-					t.Logf("** Accept **")
-
-					// rule accepted, store the match
-					if matches == nil {
-						matches = []string{}
-					}
-
-					term := string(input[current : current+lookahead])
-					matches = append(matches, term)
-
-					t.Logf("PUSH: %q", term)
-
-					// advance the position
-					if lookahead == 0 {
-						current = current + 1
-					} else {
-						current = current + lookahead
-					}
-
-					lookahead = 0
-
-				case textlexer.StateReject:
-
-					if rule != nil {
-						lookahead = 0
-						t.Logf("** Reject **: rule changed")
-						continue
-					}
-
-					// advance the position
-					if lookahead == 0 {
-						t.Logf("** Reject **: current+1")
-						current = current + 1
-					} else {
-						t.Logf("** Reject **: current+lookahead")
-						current = current + lookahead
-					}
-
-					lookahead = 0
-
-				/*
-					case textlexer.StateBacktrack:
-						// reset state
-						lookahead = 0
-
-						// continue to the next iteration immediately to prevent being stopped by EOF
-						continue
-				*/
-				default:
-					t.Fatalf("Unexpected state: %v", state)
-				}
-
-				if rules.IsEOF(r) && rule == nil {
-					t.Logf("EOF reached")
 					break
 				}
 			}

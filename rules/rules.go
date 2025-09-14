@@ -1,9 +1,12 @@
 package rules
 
 import (
+	stdlog "log"
+
 	"github.com/xiam/textlexer"
 )
 
+// common symbols and tokens
 const (
 	doubleQuote = '"'
 	singleQuote = '\''
@@ -22,6 +25,9 @@ const (
 	semicolon = ';'
 	comma     = ','
 	period    = '.'
+	exponent  = '^'
+	tilde     = '~'
+	backtick  = '`'
 
 	lparen = '('
 	rparen = ')'
@@ -37,15 +43,47 @@ const (
 
 	hash = '#'
 
-	exclamation = '!'
-	percent     = '%'
-	question    = '?'
-	equal       = '='
-
 	newLine = '\n'
+
+	exclamation       = '!'
+	percent           = '%'
+	question          = '?'
+	equals            = '='
+	doubleEquals      = "=="
+	tripleEquals      = "==="
+	addAndAssign      = "+="
+	subtractAndAssign = "-="
+	multiplyAndAssign = "*="
+	divideAndAssign   = "/="
+	modulusAndAssign  = "%="
+	doubleStar        = "**"
+	notEquals         = "!="
+	differentFrom     = "<>"
+	increment         = "++"
+	decrement         = "--"
+
+	nullishCoalescing = "??"
+	optionalChaining  = "?."
+	shortDeclaration  = ":="
+	spreadOperator    = "..."
+	scopeOperator     = "::"
+	tripleBacktick    = "```"
+
+	leftShift  = "<<"
+	rightShift = ">>"
 )
 
-// internal character-class based matchers
+// common character classes
+var (
+	asciiLetters    = []rune{'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z'}
+	asciiDigits     = []rune{'0', '1', '2', '3', '4', '5', '6', '7', '8', '9'}
+	asciiWhitespace = []rune{' ', '\t', '\r', '\n', '\f'}
+	hexDigits       = []rune{'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f', 'A', 'B', 'C', 'D', 'E', 'F'}
+	octalDigits     = []rune{'0', '1', '2', '3', '4', '5', '6', '7'}
+	binaryDigits    = []rune{'0', '1'}
+)
+
+// common character-class based matchers
 var (
 	// matches a sequence of [0-9]
 	asciiDigitsMatcher = NewGreedyCharacterMatcher(asciiDigits)
@@ -70,17 +108,32 @@ var (
 	// matches: )
 	rparenMatcher = NewCharacterMatcher(rparen)
 
+	// matches brackets: [ or ]
+	bracketsMatcher = newAnyOfCharactersMatcher(
+		[]rune{lbracket, rbracket},
+	)
+
 	// matches: [
 	lbracketMatcher = NewCharacterMatcher(lbracket)
 
 	// matches: ]
 	rbracketMatcher = NewCharacterMatcher(rbracket)
 
+	// matches braces: { or }
+	bracesMatcher = newAnyOfCharactersMatcher(
+		[]rune{lbrace, rbrace},
+	)
+
 	// matches: {
 	lbraceMatcher = NewCharacterMatcher(lbrace)
 
 	// matches: }
 	rbraceMatcher = NewCharacterMatcher(rbrace)
+
+	// matches angles: < or >
+	anglesMatcher = newAnyOfCharactersMatcher(
+		[]rune{langle, rangle},
+	)
 
 	// matches: <
 	langleMatcher = NewCharacterMatcher(langle)
@@ -100,6 +153,15 @@ var (
 	// matches: .
 	periodMatcher = NewCharacterMatcher(period)
 
+	// matches: ^
+	exponentMatcher = NewCharacterMatcher(exponent)
+
+	// matches: ~
+	tildeMatcher = NewCharacterMatcher(tilde)
+
+	// matches: `
+	backtickMatcher = NewCharacterMatcher(backtick)
+
 	// matches: +
 	plusMatcher = NewCharacterMatcher(plus)
 
@@ -112,6 +174,9 @@ var (
 	// matches: /
 	slashMatcher = NewCharacterMatcher(slash)
 
+	// matches: \
+	backslashMatcher = NewCharacterMatcher(backslash)
+
 	// matches: |
 	pipeMatcher = NewCharacterMatcher(pipe)
 
@@ -119,7 +184,67 @@ var (
 	ampersandMatcher = NewCharacterMatcher(ampersand)
 
 	// matches: =
-	equalMatcher = NewCharacterMatcher(equal)
+	equalsMatcher = NewCharacterMatcher(equals)
+
+	// matches: ==
+	doubleEqualsMatcher = NewMatchString(doubleEquals)
+
+	// matches: ===
+	tripleEqualsMatcher = NewMatchString(tripleEquals)
+
+	// matches: +=
+	addAndAssignMatcher = NewMatchString(addAndAssign)
+
+	// matches: -=
+	subtractAndAssignMatcher = NewMatchString(subtractAndAssign)
+
+	// matches: *=
+	multiplyAndAssignMatcher = NewMatchString(multiplyAndAssign)
+
+	// matches: /=
+	divideAndAssignMatcher = NewMatchString(divideAndAssign)
+
+	// matches: %=
+	modulusAndAssignMatcher = NewMatchString(modulusAndAssign)
+
+	// matches: **
+	doubleStarMatcher = NewMatchString(doubleStar)
+
+	// matches: !=
+	notEqualsMatcher = NewMatchString(notEquals)
+
+	// matches: <>
+	differentFromMatcher = NewMatchString(differentFrom)
+
+	// matches: ++
+	incrementMatcher = NewMatchString(increment)
+
+	// matches: --
+	decrementMatcher = NewMatchString(decrement)
+
+	// matches: ??
+	nullishCoalescingMatcher = NewMatchString(nullishCoalescing)
+
+	// matches: ?.
+	optionalChainingMatcher = NewMatchString(optionalChaining)
+
+	// matches: :=
+	shortDeclarationMatcher = NewMatchString(shortDeclaration)
+
+	// matches: ...
+	spreadOperatorMatcher = NewMatchString(spreadOperator)
+
+	// matches: ::
+	scopeOperatorMatcher = NewMatchString(scopeOperator)
+
+	// matches: <<
+	leftShiftMatcher = NewMatchString(leftShift)
+
+	// matches: >>
+	rightShiftMatcher = NewMatchString(rightShift)
+
+	// matches: ```
+	tripleBacktickMatcher = NewMatchString(tripleBacktick)
 
 	// matches: !
 	exclamationMatcher = NewCharacterMatcher(exclamation)
@@ -128,7 +253,7 @@ var (
 	percentMatcher = NewCharacterMatcher(percent)
 
 	// matches: ?
-	questionMatcher = NewCharacterMatcher(question)
+	questionMarkMatcher = NewCharacterMatcher(question)
 
 	// matches "
 	doubleQuoteMatcher = NewCharacterMatcher(doubleQuote)
@@ -152,21 +277,42 @@ var (
 
 	// matches common whitespace characters
 	commonWhitespaceMatcher = NewGreedyCharacterMatcher(asciiWhitespace)
-)
 
-// common patterns
-var (
-	lessThanOrEqualMatcher    = NewMatchString("<=")
+	// matches a fat arrow: =>
+	fatArrowMatcher = NewMatchString("=>")
+
+	// matches an arrow: ->
+	arrowMatcher = NewMatchString("->")
+
+	// matches a logical OR: ||
+	logicalOrMatcher = NewMatchString("||")
+
+	// matches a logical AND: &&
+	logicalAndMatcher = NewMatchString("&&")
+
+	// matches a less than or equal operator: <=
+	lessThanOrEqualMatcher = NewMatchString("<=")
+
+	// matches a greater than or equal operator: >=
 	greaterThanOrEqualMatcher = NewMatchString(">=")
 )
 
-// TODO: remove
-func MatchAnyCharacter(r rune) (textlexer.Rule, textlexer.State) {
-	return nil, textlexer.StateContinue
-}
+var (
+	// matches a numeric value
+	unsignedNumericSwitchMatcher = NewSwitchMatcher(
+		UnsignedInteger,
+		UnsignedFloat,
+	)
 
-// MatchEOF matches the end of file (EOF) character.
-func MatchEOF(r rune) (textlexer.Rule, textlexer.State) {
+	// matches a signed numeric value
+	signedNumericSwitchMatcher = NewSwitchMatcher(
+		SignedInteger,
+		SignedFloat,
+	)
+)
+
+// EOF matches the end of file (EOF) character.
+func EOF(r rune) (textlexer.Rule, textlexer.State) {
 	if IsEOF(r) {
 		return nil, textlexer.StateAccept
 	}
@@ -174,14 +320,14 @@ func MatchEOF(r rune) (textlexer.Rule, textlexer.State) {
 	return nil, textlexer.StateReject
 }
 
-// MatchUnsignedInteger matches one or more digits (0-9).
+// UnsignedInteger matches one or more digits (0-9).
 // Example: `123`, `0`, `9876543210`
-func MatchUnsignedInteger(r rune) (textlexer.Rule, textlexer.State) {
+func UnsignedInteger(r rune) (textlexer.Rule, textlexer.State) {
 	return asciiDigitsMatcher(r)
 }
 
-// MatchEOL matches the end of line (EOL) character or EOF.
-func MatchEOL(r rune) (textlexer.Rule, textlexer.State) {
+// EOL matches the end of line (EOL) character or EOF.
+func EOL(r rune) (textlexer.Rule, textlexer.State) {
 	if r == '\r' {
 		return nlMatcher, textlexer.StateContinue
 	}
@@ -193,37 +339,38 @@ func MatchEOL(r rune) (textlexer.Rule, textlexer.State) {
 	return nlMatcher(r)
 }
 
-// MatchZeroOrMoreWhitespaces matches zero or more whitespace characters.
+// OptionalWhitespace matches zero or more whitespace characters.
 // Example: ` `, `\t`, `\n\r\n`, `\t\t `, “
-func MatchZeroOrMoreWhitespaces(r rune) (textlexer.Rule, textlexer.State) {
+func OptionalWhitespace(r rune) (textlexer.Rule, textlexer.State) {
 	if isCommonWhitespace(r) {
-		return MatchZeroOrMoreWhitespaces, textlexer.StateContinue
+		return OptionalWhitespace, textlexer.StateContinue
 	}
 
 	return PushBackCurrentAndAccept(r)
 }
 
-// MatchSignedInteger matches an optional sign (+/-) and digits. It allows
+// SignedInteger matches an optional sign (+/-) and digits. It allows
 // whitespace between the sign and the number.
 // Example: `123`, `+45`, `-0`, `+ 99`, `- 1`
-func MatchSignedInteger(r rune) (textlexer.Rule, textlexer.State) {
+func SignedInteger(r rune) (textlexer.Rule, textlexer.State) {
 	if r == '-' || r == '+' {
 		// match might start with a sign, in this case, we continue
 		// matching whitespace, and expect the numeric part after that
 		return newWhitespaceConsumer(
-			MatchUnsignedInteger,
+			UnsignedInteger,
 		), textlexer.StateContinue
 	}
 
-	return MatchUnsignedInteger(r)
+	return UnsignedInteger(r)
 }
 
-// MatchUnsignedFloat matches a floating-point number without sign.
-// Example: `123.45`, `0.1`, `.56`
-func MatchUnsignedFloat(r rune) (textlexer.Rule, textlexer.State) {
+// UnsignedFloat matches a floating-point number without sign.
+// Example: `123.45`, `0.1`, `.56`, `123.`, `0.`
+func UnsignedFloat(r rune) (textlexer.Rule, textlexer.State) {
 	var integerPartMatcher textlexer.Rule
-	var radixPointMatcher textlexer.Rule
 	var fractionalPartMatcher textlexer.Rule
+
+	var radixPointMatcher func(bool) func(rune) (textlexer.Rule, textlexer.State)
 
 	fractionalPartMatcher = func(r rune) (textlexer.Rule, textlexer.State) {
 		if isASCIIDigit(r) {
@@ -233,18 +380,29 @@ func MatchUnsignedFloat(r rune) (textlexer.Rule, textlexer.State) {
 		return PushBackCurrentAndAccept(r)
 	}
 
-	radixPointMatcher = func(r rune) (textlexer.Rule, textlexer.State) {
-		if r != '.' {
-			return nil, textlexer.StateReject
-		}
-
-		// expects a digit immediately after the radix point
+	radixPointMatcher = func(requireFractional bool) func(r rune) (textlexer.Rule, textlexer.State) {
 		return func(r rune) (textlexer.Rule, textlexer.State) {
-			if isASCIIDigit(r) {
-				return fractionalPartMatcher, textlexer.StateContinue
+			if r != '.' {
+				return nil, textlexer.StateReject
 			}
-			return nil, textlexer.StateReject
-		}, textlexer.StateContinue
+
+			return func(r rune) (textlexer.Rule, textlexer.State) {
+				// if any digit follows the radix point, we can continue matching the
+				// fractional part
+				if isASCIIDigit(r) {
+					return fractionalPartMatcher, textlexer.StateContinue
+				}
+
+				if requireFractional {
+					// we require a fractional part, but none was found
+					return nil, textlexer.StateReject
+				}
+
+				// if no digit follows the radix point, we can accept the radix point and
+				// stop matching
+				return PushBackCurrentAndAccept(r)
+			}, textlexer.StateContinue
+		}
 	}
 
 	integerPartMatcher = func(r rune) (textlexer.Rule, textlexer.State) {
@@ -253,80 +411,78 @@ func MatchUnsignedFloat(r rune) (textlexer.Rule, textlexer.State) {
 		}
 
 		if r == '.' {
-			return radixPointMatcher(r)
+			return radixPointMatcher(false)(r)
 		}
 
 		return nil, textlexer.StateReject
 	}
 
-	return integerPartMatcher(r)
+	if isASCIIDigit(r) {
+		return integerPartMatcher, textlexer.StateContinue
+	}
+
+	if r == '.' {
+		return radixPointMatcher(true)(r)
+	}
+
+	return nil, textlexer.StateReject
 }
 
-// MatchSignedFloat matches a float with optional sign (+/-). Whitespace is
+// SignedFloat matches a float with optional sign (+/-). Whitespace is
 // allowed after the sign and before the number.
 // Example: `123.45`, `+0.1`, `-.56`, `+ 123.45`, `- .5`
-func MatchSignedFloat(r rune) (textlexer.Rule, textlexer.State) {
+func SignedFloat(r rune) (textlexer.Rule, textlexer.State) {
 	if r == '-' || r == '+' {
 		return newWhitespaceConsumer(
-			MatchUnsignedFloat,
+			UnsignedFloat,
 		), textlexer.StateContinue
 	}
 
-	return MatchUnsignedFloat(r)
+	return UnsignedFloat(r)
 }
 
-var unsignedNumericSwitchMatcher = NewSwitchMatcher(
-	MatchUnsignedInteger,
-	MatchUnsignedFloat,
-)
-
-var signedNumericSwitchMatcher = NewSwitchMatcher(
-	MatchSignedInteger,
-	MatchSignedFloat,
-)
-
-// MatchUnsignedNumeric matches integers or floating-point numbers.
+// UnsignedNumeric matches integers or floating-point numbers.
 // Example: `123`, `0`, `123.45`, `0.5`, `.5`, `5.0`
-func MatchUnsignedNumeric(r rune) (textlexer.Rule, textlexer.State) {
+func UnsignedNumeric(r rune) (textlexer.Rule, textlexer.State) {
 	return unsignedNumericSwitchMatcher(r)
 }
 
-// MatchSignedNumeric matches numbers with optional sign (+/-). Whitespace is
+// SignedNumeric matches numbers with optional sign (+/-). Whitespace is
 // allowed after the sign and before the number.
 // Example: `123`, `+45`, `-0.5`, `+ 99`, `- .5`, `+ 1.`, `- 123.45`
-func MatchSignedNumeric(r rune) (textlexer.Rule, textlexer.State) {
+func SignedNumeric(r rune) (textlexer.Rule, textlexer.State) {
 	return signedNumericSwitchMatcher(r)
 }
 
-// MatchWhitespace matches one or more whitespace characters.
+// Whitespace matches one or more whitespace characters.
 // Example: ` `, ` \t`, `\n\r\n`, `\t\t `
-func MatchWhitespace(r rune) (textlexer.Rule, textlexer.State) {
+func Whitespace(r rune) (textlexer.Rule, textlexer.State) {
 	return commonWhitespaceMatcher(r)
 }
 
-// MatchIdentifier matches programming identifiers (letter followed by letters/digits).
+// Identifier matches programming identifiers (letter followed by letters/digits).
 // Example: `variable`, `count1`, `isValid`, `i`, `MyClass`
-func MatchIdentifier(r rune) (next textlexer.Rule, state textlexer.State) {
+func Identifier(r rune) (next textlexer.Rule, state textlexer.State) {
 	var matcher textlexer.Rule
 
 	matcher = func(r rune) (textlexer.Rule, textlexer.State) {
-		if isASCIILetter(r) || isASCIIDigit(r) {
+		if isASCIILetter(r) || isASCIIDigit(r) || r == '_' {
 			return matcher, textlexer.StateContinue
 		}
 
 		return PushBackCurrentAndAccept(r)
 	}
 
-	if isASCIILetter(r) {
+	if isASCIILetter(r) || r == '_' {
 		return matcher, textlexer.StateContinue
 	}
 
 	return nil, textlexer.StateReject
 }
 
-// MatchDoubleQuotedString matches text in double quotes.
+// DoubleQuotedString matches text in double quotes.
 // Example: `"hello world"`, `""`, `"a"`, `"quote"`
-func MatchDoubleQuotedString(r rune) (textlexer.Rule, textlexer.State) {
+func DoubleQuotedString(r rune) (textlexer.Rule, textlexer.State) {
 	doubleQuotedStringMatcher := newChainedRuleMatcher(
 		doubleQuoteMatcher,
 		func(r rune) (textlexer.Rule, textlexer.State) {
@@ -345,9 +501,9 @@ func MatchDoubleQuotedString(r rune) (textlexer.Rule, textlexer.State) {
 	return doubleQuotedStringMatcher(r)
 }
 
-// MatchSingleQuotedString matches text in single quotes.
+// SingleQuotedString matches text in single quotes.
 // Example: `'hello world'`, `"`, `'a'`, `'quote'`
-func MatchSingleQuotedString(r rune) (textlexer.Rule, textlexer.State) {
+func SingleQuotedString(r rune) (textlexer.Rule, textlexer.State) {
 	singleQuoteStringMatcher := newChainedRuleMatcher(
 		singleQuoteMatcher,
 		func(r rune) (textlexer.Rule, textlexer.State) {
@@ -366,11 +522,11 @@ func MatchSingleQuotedString(r rune) (textlexer.Rule, textlexer.State) {
 	return singleQuoteStringMatcher(r)
 }
 
-// MatchEscapedDoubleQuotedString matches text in double quotes with escape
+// DoubleQuotedEscapedString matches text in double quotes with escape
 // sequences. A scape sequence is a backslash followed by any character.  The
 // validity of the escape sequence is not checked.
 // Example: `"hello \"world\""`, `"a\\b"`, `"\\"`, `"escaped"`
-func MatchEscapedDoubleQuotedString(r rune) (textlexer.Rule, textlexer.State) {
+func DoubleQuotedEscapedString(r rune) (textlexer.Rule, textlexer.State) {
 	escapedDoubleQuotedStringMatcher := newChainedRuleMatcher(
 		doubleQuoteMatcher,
 		func(r rune) (textlexer.Rule, textlexer.State) {
@@ -399,21 +555,22 @@ func MatchEscapedDoubleQuotedString(r rune) (textlexer.Rule, textlexer.State) {
 	return escapedDoubleQuotedStringMatcher(r)
 }
 
-// MatchInlineComment matches single-line comments starting with //.
+// DoubleSlashComment matches single-line comments starting with //.
 // Example: `// This is a comment`, `// Another comment<EOF>`
-func MatchInlineComment(r rune) (textlexer.Rule, textlexer.State) {
+func DoubleSlashComment(r rune) (textlexer.Rule, textlexer.State) {
 	return newChainedRuleMatcher(
 		newLiteralSequenceMatcher([]rune{slash, slash}),
-		MatchExceptEOL,
+		AnyUntilEOL,
 	)(r)
 }
 
-// MatchExceptEOF consumes all characters until EOF.
-func MatchExceptEOF(r rune) (textlexer.Rule, textlexer.State) {
+// AnyUntilEOF consumes all characters until EOF.
+func AnyUntilEOF(r rune) (textlexer.Rule, textlexer.State) {
 	var matcher textlexer.Rule
 
 	matcher = func(r rune) (textlexer.Rule, textlexer.State) {
 		if IsEOF(r) {
+			stdlog.Println("EOF")
 			return PushBackCurrentAndAccept(r)
 		}
 
@@ -423,8 +580,8 @@ func MatchExceptEOF(r rune) (textlexer.Rule, textlexer.State) {
 	return matcher(r)
 }
 
-// MatchExceptEOL consumes characters until newline or EOF.
-func MatchExceptEOL(r rune) (textlexer.Rule, textlexer.State) {
+// AnyUntilEOL consumes characters until newline or EOF.
+func AnyUntilEOL(r rune) (textlexer.Rule, textlexer.State) {
 	var matcher textlexer.Rule
 
 	matcher = func(r rune) (textlexer.Rule, textlexer.State) {
@@ -442,9 +599,9 @@ func MatchExceptEOL(r rune) (textlexer.Rule, textlexer.State) {
 	return matcher(r)
 }
 
-// MatchSlashStarComment matches C-style /* */ comments.
+// SlashStarComment matches C-style /* */ comments.
 // Example: `/* comment */`, `/* multi\nline */`, `/**/`
-func MatchSlashStarComment(r rune) (textlexer.Rule, textlexer.State) {
+func SlashStarComment(r rune) (textlexer.Rule, textlexer.State) {
 	return newChainedRuleMatcher(
 		newLiteralSequenceMatcher([]rune{slash, star}),
 		func(r rune) (textlexer.Rule, textlexer.State) {
@@ -473,45 +630,45 @@ func MatchSlashStarComment(r rune) (textlexer.Rule, textlexer.State) {
 	)(r)
 }
 
-// MatchBasicMathOperator matches +, -, *, or /.
-func MatchBasicMathOperator(r rune) (textlexer.Rule, textlexer.State) {
+// BasicMathOperator matches +, -, *, or /.
+func BasicMathOperator(r rune) (textlexer.Rule, textlexer.State) {
 	return mathOperatorsMatcher(r)
 }
 
-// MatchLessEqual matches the less than or equal operator `<=`.
-func MatchLessEqual(r rune) (textlexer.Rule, textlexer.State) {
+// LessEqual matches the less than or equal operator `<=`.
+func LessEqual(r rune) (textlexer.Rule, textlexer.State) {
 	return lessThanOrEqualMatcher(r)
 }
 
-// MatchGreaterEqual matches the greater than or equal operator `>=`.
-func MatchGreaterEqual(r rune) (textlexer.Rule, textlexer.State) {
+// GreaterEqual matches the greater than or equal operator `>=`.
+func GreaterEqual(r rune) (textlexer.Rule, textlexer.State) {
 	return greaterThanOrEqualMatcher(r)
 }
 
-// MatchLogicalAnd matches the logical AND operator `&&`.
-func MatchLogicalAnd(r rune) (textlexer.Rule, textlexer.State) {
-	return NewMatchString("&&")(r)
+// LogicalAnd matches the logical AND operator `&&`.
+func LogicalAnd(r rune) (textlexer.Rule, textlexer.State) {
+	return logicalAndMatcher(r)
 }
 
-// MatchLogicalOr matches the logical OR operator `||`.
-func MatchLogicalOr(r rune) (textlexer.Rule, textlexer.State) {
-	return NewMatchString("||")(r)
+// LogicalOr matches the logical OR operator `||`.
+func LogicalOr(r rune) (textlexer.Rule, textlexer.State) {
+	return logicalOrMatcher(r)
 }
 
-// MatchArrow matches the arrow operator `->`.
-func MatchArrow(r rune) (textlexer.Rule, textlexer.State) {
-	return NewMatchString("->")(r)
+// Arrow matches the arrow operator `->`.
+func Arrow(r rune) (textlexer.Rule, textlexer.State) {
+	return arrowMatcher(r)
 }
 
-// MatchFatArrow matches the fat arrow operator `=>`.
-func MatchFatArrow(r rune) (textlexer.Rule, textlexer.State) {
-	return NewMatchString("=>")(r)
+// FatArrow matches the fat arrow operator `=>`.
+func FatArrow(r rune) (textlexer.Rule, textlexer.State) {
+	return fatArrowMatcher(r)
 }
 
-// MatchHexInteger matches hexadecimal integers prefixed with `0x`
+// HexInteger matches hexadecimal integers prefixed with `0x`
 // or `0X`.
 // Example: `0x1A`, `0XFF`, `0x0`, `0xabcdef`
-func MatchHexInteger(r rune) (textlexer.Rule, textlexer.State) {
+func HexInteger(r rune) (textlexer.Rule, textlexer.State) {
 	zeroXMatcher := func(r rune) (textlexer.Rule, textlexer.State) {
 		if r == '0' {
 			return func(r rune) (textlexer.Rule, textlexer.State) {
@@ -531,9 +688,9 @@ func MatchHexInteger(r rune) (textlexer.Rule, textlexer.State) {
 	)(r)
 }
 
-// MatchBinaryInteger matches binary integers prefixed with `0b` or `0B`.
+// BinaryInteger matches binary integers prefixed with `0b` or `0B`.
 // Example: `0b1010`, `0B11`, `0b0`
-func MatchBinaryInteger(r rune) (textlexer.Rule, textlexer.State) {
+func BinaryInteger(r rune) (textlexer.Rule, textlexer.State) {
 	zeroBMatcher := func(r rune) (textlexer.Rule, textlexer.State) {
 		if r == '0' {
 			return func(r rune) (textlexer.Rule, textlexer.State) {
@@ -553,9 +710,9 @@ func MatchBinaryInteger(r rune) (textlexer.Rule, textlexer.State) {
 	)(r)
 }
 
-// MatchOctalInteger matches octal integers prefixed with `0o` or `0O`.
+// OctalInteger matches octal integers prefixed with `0o` or `0O`.
 // Example: `0o12`, `0O7`, `0o0`
-func MatchOctalInteger(r rune) (textlexer.Rule, textlexer.State) {
+func OctalInteger(r rune) (textlexer.Rule, textlexer.State) {
 	zeroOMatcher := func(r rune) (textlexer.Rule, textlexer.State) {
 		if r == '0' {
 			return func(r rune) (textlexer.Rule, textlexer.State) {
@@ -575,157 +732,18 @@ func MatchOctalInteger(r rune) (textlexer.Rule, textlexer.State) {
 	)(r)
 }
 
-// MatchHashComment matches single-line comments starting with #.
+// HashComment matches single-line comments starting with #.
 // Example: `# This is a comment\n`, `# Another comment<EOF>`
-func MatchHashComment(r rune) (textlexer.Rule, textlexer.State) {
+func HashComment(r rune) (textlexer.Rule, textlexer.State) {
 	return newChainedRuleMatcher(
 		hashMatcher,
-		MatchExceptEOL,
+		AnyUntilEOL,
 	)(r)
 }
 
-// MatchIdentifierWithUnderscore matches programming identifiers
-// (letter or underscore followed by letters/digits/underscores).
-// Example: `variable`, `_private`, `count1`, `isValid`, `i`, `My_Class`
-func MatchIdentifierWithUnderscore(r rune) (next textlexer.Rule, state textlexer.State) {
-	var nextChar textlexer.Rule
-
-	nextChar = func(r rune) (textlexer.Rule, textlexer.State) {
-		// can be followed by more letters, digits, or underscores
-		if isASCIILetter(r) || isASCIIDigit(r) || r == '_' {
-			return nextChar, textlexer.StateContinue
-		}
-
-		// ends with any other character
-		return PushBackCurrentAndAccept(r)
-	}
-
-	// starts with a letter or underscore
-	if isASCIILetter(r) || r == '_' {
-		return nextChar, textlexer.StateContinue
-	}
-
-	return nil, textlexer.StateReject
-}
-
-// AcceptAnyParen matches either ( or ).
-// Example: `(`, `)`
-func AcceptAnyParen(r rune) (textlexer.Rule, textlexer.State) {
-	return parensMatcher(r)
-}
-
-// AcceptLParen matches an opening parenthesis (.
-func AcceptLParen(r rune) (textlexer.Rule, textlexer.State) {
-	return lparenMatcher(r)
-}
-
-// AcceptRParen matches a closing parenthesis ).
-func AcceptRParen(r rune) (textlexer.Rule, textlexer.State) {
-	return rparenMatcher(r)
-}
-
-// AcceptLBrace matches an opening brace {.
-func AcceptLBrace(r rune) (textlexer.Rule, textlexer.State) {
-	return lbraceMatcher(r)
-}
-
-// AcceptRBrace matches a closing brace }.
-func AcceptRBrace(r rune) (textlexer.Rule, textlexer.State) {
-	return rbraceMatcher(r)
-}
-
-// AcceptLBracket matches an opening bracket [.
-func AcceptLBracket(r rune) (textlexer.Rule, textlexer.State) {
-	return lbracketMatcher(r)
-}
-
-// AcceptRBracket matches a closing bracket ].
-func AcceptRBracket(r rune) (textlexer.Rule, textlexer.State) {
-	return rbracketMatcher(r)
-}
-
-// AcceptLAngle matches a left angle bracket <.
-func AcceptLAngle(r rune) (textlexer.Rule, textlexer.State) {
-	return langleMatcher(r)
-}
-
-// AcceptRAngle matches a right angle bracket >.
-func AcceptRAngle(r rune) (textlexer.Rule, textlexer.State) {
-	return rangleMatcher(r)
-}
-
-// AcceptComma matches a comma.
-func AcceptComma(r rune) (textlexer.Rule, textlexer.State) {
-	return commaMatcher(r)
-}
-
-// AcceptColon matches a colon.
-func AcceptColon(r rune) (textlexer.Rule, textlexer.State) {
-	return colonMatcher(r)
-}
-
-// AcceptSemicolon matches a semicolon.
-func AcceptSemicolon(r rune) (textlexer.Rule, textlexer.State) {
-	return semicolonMatcher(r)
-}
-
-// AcceptPeriod matches a period.
-func AcceptPeriod(r rune) (textlexer.Rule, textlexer.State) {
-	return periodMatcher(r)
-}
-
-// AcceptPlus matches a plus sign.
-func AcceptPlus(r rune) (textlexer.Rule, textlexer.State) {
-	return plusMatcher(r)
-}
-
-// AcceptMinus matches a minus sign.
-func AcceptMinus(r rune) (textlexer.Rule, textlexer.State) {
-	return minusMatcher(r)
-}
-
-// AcceptStar matches an asterisk.
-func AcceptStar(r rune) (textlexer.Rule, textlexer.State) {
-	return starMatcher(r)
-}
-
-// AcceptSlash matches a forward slash.
-func AcceptSlash(r rune) (textlexer.Rule, textlexer.State) {
-	return slashMatcher(r)
-}
-
-// AcceptPercent matches a percent sign.
-func AcceptPercent(r rune) (textlexer.Rule, textlexer.State) {
-	return percentMatcher(r)
-}
-
-// AcceptEqual matches an equals sign.
-func AcceptEqual(r rune) (textlexer.Rule, textlexer.State) {
-	return equalMatcher(r)
-}
-
-// AcceptExclamation matches an exclamation mark.
-func AcceptExclamation(r rune) (textlexer.Rule, textlexer.State) {
-	return exclamationMatcher(r)
-}
-
-// AcceptPipe matches a pipe symbol.
-func AcceptPipe(r rune) (textlexer.Rule, textlexer.State) {
-	return pipeMatcher(r)
-}
-
-// AcceptAmpersand matches an ampersand.
-func AcceptAmpersand(r rune) (textlexer.Rule, textlexer.State) {
-	return ampersandMatcher(r)
-}
-
-// AcceptQuestionMark matches a question mark.
-func AcceptQuestionMark(r rune) (textlexer.Rule, textlexer.State) {
-	return questionMatcher(r)
-}
-
-// MatchUntilCommonWhitespaceOrEOF matches characters until a common whitespace or EOF.
-func MatchUntilCommonWhitespaceOrEOF(r rune) (textlexer.Rule, textlexer.State) {
+// AnyUntilWhitespaceOrEOF matches any sequence of characters until a common
+// whitespace or EOF.
+func AnyUntilWhitespaceOrEOF(r rune) (textlexer.Rule, textlexer.State) {
 	// starts with a non-whitespace character
 	start := func(r rune) (textlexer.Rule, textlexer.State) {
 		if isCommonWhitespace(r) || IsEOF(r) {
@@ -745,4 +763,263 @@ func MatchUntilCommonWhitespaceOrEOF(r rune) (textlexer.Rule, textlexer.State) {
 	}
 
 	return newChainedRuleMatcher(start, next)(r)
+}
+
+// Paren matches either ( or ).
+// Example: `(`, `)`
+func Paren(r rune) (textlexer.Rule, textlexer.State) {
+	return parensMatcher(r)
+}
+
+// LParen matches an opening parenthesis (.
+func LParen(r rune) (textlexer.Rule, textlexer.State) {
+	return lparenMatcher(r)
+}
+
+// RParen matches a closing parenthesis ).
+func RParen(r rune) (textlexer.Rule, textlexer.State) {
+	return rparenMatcher(r)
+}
+
+// Brace matches either { or }.
+// Example: `{`, `}`
+func Brace(r rune) (textlexer.Rule, textlexer.State) {
+	return bracesMatcher(r)
+}
+
+// LBrace matches an opening brace {.
+func LBrace(r rune) (textlexer.Rule, textlexer.State) {
+	return lbraceMatcher(r)
+}
+
+// RBrace matches a closing brace }.
+func RBrace(r rune) (textlexer.Rule, textlexer.State) {
+	return rbraceMatcher(r)
+}
+
+// Bracket matches either [ or ].
+// Example: `[`, `]`
+func Bracket(r rune) (textlexer.Rule, textlexer.State) {
+	return bracketsMatcher(r)
+}
+
+// LBracket matches an opening bracket [.
+func LBracket(r rune) (textlexer.Rule, textlexer.State) {
+	return lbracketMatcher(r)
+}
+
+// RBracket matches a closing bracket ].
+func RBracket(r rune) (textlexer.Rule, textlexer.State) {
+	return rbracketMatcher(r)
+}
+
+// Angle matches either < or >.
+// Example: `<`, `>`
+func Angle(r rune) (textlexer.Rule, textlexer.State) {
+	return anglesMatcher(r)
+}
+
+// LAngle matches a left angle bracket <.
+func LAngle(r rune) (textlexer.Rule, textlexer.State) {
+	return langleMatcher(r)
+}
+
+// RAngle matches a right angle bracket >.
+func RAngle(r rune) (textlexer.Rule, textlexer.State) {
+	return rangleMatcher(r)
+}
+
+// Comma matches a comma.
+func Comma(r rune) (textlexer.Rule, textlexer.State) {
+	return commaMatcher(r)
+}
+
+// Colon matches a colon.
+func Colon(r rune) (textlexer.Rule, textlexer.State) {
+	return colonMatcher(r)
+}
+
+// Semicolon matches a semicolon.
+func Semicolon(r rune) (textlexer.Rule, textlexer.State) {
+	return semicolonMatcher(r)
+}
+
+// Exponent matches an exponent sign (^).
+func Exponent(r rune) (textlexer.Rule, textlexer.State) {
+	return exponentMatcher(r)
+}
+
+// Tilde matches a tilde (~).
+func Tilde(r rune) (textlexer.Rule, textlexer.State) {
+	return tildeMatcher(r)
+}
+
+// Backtick matches a backtick (`).
+func Backtick(r rune) (textlexer.Rule, textlexer.State) {
+	return backtickMatcher(r)
+}
+
+// Period matches a period.
+func Period(r rune) (textlexer.Rule, textlexer.State) {
+	return periodMatcher(r)
+}
+
+// Plus matches a plus sign.
+func Plus(r rune) (textlexer.Rule, textlexer.State) {
+	return plusMatcher(r)
+}
+
+// Minus matches a minus sign.
+func Minus(r rune) (textlexer.Rule, textlexer.State) {
+	return minusMatcher(r)
+}
+
+// Star matches an asterisk.
+func Star(r rune) (textlexer.Rule, textlexer.State) {
+	return starMatcher(r)
+}
+
+// Slash matches a forward slash.
+func Slash(r rune) (textlexer.Rule, textlexer.State) {
+	return slashMatcher(r)
+}
+
+// Backslash matches a backslash.
+func Backslash(r rune) (textlexer.Rule, textlexer.State) {
+	return backslashMatcher(r)
+}
+
+// Percent matches a percent sign.
+func Percent(r rune) (textlexer.Rule, textlexer.State) {
+	return percentMatcher(r)
+}
+
+// Equal matches an equals sign (=).
+func Equals(r rune) (textlexer.Rule, textlexer.State) {
+	return equalsMatcher(r)
+}
+
+// DoubleEquals matches a double equals sign (==).
+func DoubleEquals(r rune) (textlexer.Rule, textlexer.State) {
+	return doubleEqualsMatcher(r)
+}
+
+// TripleEquals matches a triple equals sign (===).
+func TripleEquals(r rune) (textlexer.Rule, textlexer.State) {
+	return tripleEqualsMatcher(r)
+}
+
+// AddAndAssign matches a plus equals sign (+=).
+func AddAndAssign(r rune) (textlexer.Rule, textlexer.State) {
+	return addAndAssignMatcher(r)
+}
+
+// SubtractAndAssign matches a minus equals sign (-=).
+func SubtractAndAssign(r rune) (textlexer.Rule, textlexer.State) {
+	return subtractAndAssignMatcher(r)
+}
+
+// MultiplyAndAssign matches a star equals sign (*=).
+func MultiplyAndAssign(r rune) (textlexer.Rule, textlexer.State) {
+	return multiplyAndAssignMatcher(r)
+}
+
+// DivideAndAssign matches a slash equals sign (/=).
+func DivideAndAssign(r rune) (textlexer.Rule, textlexer.State) {
+	return divideAndAssignMatcher(r)
+}
+
+// ModulusAndAssign matches a percent equals sign (%=).
+func ModulusAndAssign(r rune) (textlexer.Rule, textlexer.State) {
+	return modulusAndAssignMatcher(r)
+}
+
+// DoubleStar matches a double star (**).
+func DoubleStar(r rune) (textlexer.Rule, textlexer.State) {
+	return doubleStarMatcher(r)
+}
+
+// NotEquals matches a not equals sign (!=).
+func NotEquals(r rune) (textlexer.Rule, textlexer.State) {
+	return notEqualsMatcher(r)
+}
+
+// DifferentFrom matches a different from sign (<>).
+func DifferentFrom(r rune) (textlexer.Rule, textlexer.State) {
+	return differentFromMatcher(r)
+}
+
+// Increment matches an increment operator (++).
+func Increment(r rune) (textlexer.Rule, textlexer.State) {
+	return incrementMatcher(r)
+}
+
+// Decrement matches a decrement operator (--).
+func Decrement(r rune) (textlexer.Rule, textlexer.State) {
+	return decrementMatcher(r)
+}
+
+// NullishCoalescing matches a nullish coalescing operator (??).
+func NullishCoalescing(r rune) (textlexer.Rule, textlexer.State) {
+	return nullishCoalescingMatcher(r)
+}
+
+// OptionalChaining matches an optional chaining operator (?.)
+func OptionalChaining(r rune) (textlexer.Rule, textlexer.State) {
+	return optionalChainingMatcher(r)
+}
+
+// ShortDeclaration matches a short declaration operator (:=).
+func ShortDeclaration(r rune) (textlexer.Rule, textlexer.State) {
+	return shortDeclarationMatcher(r)
+}
+
+// SpreadOperator matches a spread operator (...).
+func SpreadOperator(r rune) (textlexer.Rule, textlexer.State) {
+	return spreadOperatorMatcher(r)
+}
+
+// ScopeOperator matches a scope operator (::).
+func ScopeOperator(r rune) (textlexer.Rule, textlexer.State) {
+	return scopeOperatorMatcher(r)
+}
+
+// TripleBacktick matches a triple backtick (```).
+func TripleBacktick(r rune) (textlexer.Rule, textlexer.State) {
+	return tripleBacktickMatcher(r)
+}
+
+// DoubleQuote matches a double quote.
+func DoubleQuote(r rune) (textlexer.Rule, textlexer.State) {
+	return doubleQuoteMatcher(r)
+}
+
+// LeftShift matches a left shift operator (<<).
+func LeftShift(r rune) (textlexer.Rule, textlexer.State) {
+	return leftShiftMatcher(r)
+}
+
+// RightShift matches a right shift operator (>>).
+func RightShift(r rune) (textlexer.Rule, textlexer.State) {
+	return rightShiftMatcher(r)
+}
+
+// Exclamation matches an exclamation mark.
+func Exclamation(r rune) (textlexer.Rule, textlexer.State) {
+	return exclamationMatcher(r)
+}
+
+// Pipe matches a pipe symbol.
+func Pipe(r rune) (textlexer.Rule, textlexer.State) {
+	return pipeMatcher(r)
+}
+
+// Ampersand matches an ampersand.
+func Ampersand(r rune) (textlexer.Rule, textlexer.State) {
+	return ampersandMatcher(r)
+}
+
+// QuestionMark matches a question mark.
+func QuestionMark(r rune) (textlexer.Rule, textlexer.State) {
+	return questionMarkMatcher(r)
 }

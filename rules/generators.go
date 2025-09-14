@@ -2,11 +2,73 @@ package rules
 
 import (
 	"fmt"
-	stdlog "log"
 	"unicode"
 
 	"github.com/xiam/textlexer"
 )
+
+// newRuleConsumer creates a rule consumer that can accept or reject a match
+// based on the provided rules. It allows for custom acceptance and rejection
+// functions to be specified.
+func newRuleConsumer(rule textlexer.Rule, onAccept textlexer.Rule, onReject textlexer.Rule) func(r rune) (textlexer.Rule, textlexer.State) {
+	if onAccept == nil {
+		onAccept = func(r rune) (textlexer.Rule, textlexer.State) {
+			return nil, textlexer.StateAccept
+		}
+	}
+
+	if onReject == nil {
+		onReject = func(r rune) (textlexer.Rule, textlexer.State) {
+			return nil, textlexer.StateReject
+		}
+	}
+
+	var matcher func(next textlexer.Rule) func(r rune) (textlexer.Rule, textlexer.State)
+
+	matcher = func(next textlexer.Rule) func(r rune) (textlexer.Rule, textlexer.State) {
+		return func(r rune) (textlexer.Rule, textlexer.State) {
+			var state textlexer.State
+
+			if next == nil {
+				next = rule
+			}
+
+			next, state = next(r)
+
+			if state == textlexer.StateAccept {
+				return onAccept(r)
+			}
+
+			if state == textlexer.StateReject {
+				return onReject(r)
+			}
+
+			if state == textlexer.StateContinue || state == textlexer.StatePushBack {
+				return matcher(next), state
+			}
+
+			panic("newRuleConsumer: unexpected state from inner rule " + state.String())
+		}
+	}
+
+	return matcher(rule)
+}
+
+func newRuleWrapper(rule textlexer.Rule) func(r rune) (textlexer.Rule, textlexer.State) {
+	return func(r rune) (textlexer.Rule, textlexer.State) {
+		if rule == nil {
+			return nil, textlexer.StateReject
+		}
+
+		next, state := rule(r)
+
+		if state == textlexer.StatePushBack {
+			next, state = next(r) // consume the pushback
+		}
+
+		return next, state
+	}
+}
 
 func newAnyOfCharactersMatcher(accept []rune) func(r rune) (textlexer.Rule, textlexer.State) {
 	acceptMap := make(map[rune]struct{}, len(accept))
@@ -27,43 +89,35 @@ func newAnyOfRulesMatcher(rules ...textlexer.Rule) func(r rune) (textlexer.Rule,
 	return func(r rune) (textlexer.Rule, textlexer.State) {
 		var anyOfMatcher textlexer.Rule
 
-		ruleStates := map[int]*ruleState{}
-
-		for i, matcher := range rules {
-			ruleStates[i] = &ruleState{
-				rule:  matcher,
-				state: textlexer.StateContinue,
-			}
-		}
+		matching := make([]textlexer.Rule, len(rules))
+		copy(matching, rules)
 
 		anyOfMatcher = func(r rune) (textlexer.Rule, textlexer.State) {
-			matched := false
+			var matched bool
+			var state textlexer.State
 
-			for i := range ruleStates {
-				ruleState := ruleStates[i]
-
-				if ruleState.state == textlexer.StateContinue {
-					next, state := ruleState.rule(r)
-
-					ruleState.state = state
-					ruleState.rule = next
+			for i := range matching {
+				rule := matching[i]
+				if rule == nil {
+					rule = rules[i]
 				}
 
-				if ruleState.state == textlexer.StateContinue {
+				matching[i], state = rule(r)
+
+				if state == textlexer.StateContinue {
 					matched = true
 					continue
 				}
 
-				if ruleState.state == textlexer.StateAccept {
+				if state == textlexer.StateAccept {
 					return nil, textlexer.StateAccept
 				}
 
-				if ruleState.state == textlexer.StateReject {
-					delete(ruleStates, i)
+				if state == textlexer.StateReject {
 					continue
 				}
 
-				panic("unexpected state from inner rule " + ruleState.state.String())
+				panic("unexpected state from inner rule " + state.String())
 			}
 
 			if !matched {
@@ -100,7 +154,6 @@ func newSequenceIgnoreCaseMatcher(sequence []rune) func(r rune) (textlexer.Rule,
 					return matcher, textlexer.StateContinue
 				}
 
-				stdlog.Printf("matched sequence %q\n", sequence[:offset])
 				return nil, textlexer.StateAccept
 			}
 
@@ -112,22 +165,19 @@ func newSequenceIgnoreCaseMatcher(sequence []rune) func(r rune) (textlexer.Rule,
 }
 
 func newLiteralSequenceMatcher(sequence []rune) func(r rune) (textlexer.Rule, textlexer.State) {
-	return func(r rune) (textlexer.Rule, textlexer.State) {
-		offset := 0
+	var matcher func(int) func(rune) (textlexer.Rule, textlexer.State)
 
-		var matcher textlexer.Rule
+	matcher = func(offset int) func(r rune) (textlexer.Rule, textlexer.State) {
+		return func(r rune) (textlexer.Rule, textlexer.State) {
 
-		matcher = func(r rune) (textlexer.Rule, textlexer.State) {
 			if offset >= len(sequence) {
 				// already ran through all characters
 				return nil, textlexer.StateAccept
 			}
 
 			if r == sequence[offset] {
-				offset++
-
-				if offset < len(sequence) {
-					return matcher, textlexer.StateContinue
+				if offset+1 < len(sequence) {
+					return matcher(offset + 1), textlexer.StateContinue
 				}
 
 				return nil, textlexer.StateAccept
@@ -135,9 +185,9 @@ func newLiteralSequenceMatcher(sequence []rune) func(r rune) (textlexer.Rule, te
 
 			return nil, textlexer.StateReject
 		}
-
-		return matcher(r)
 	}
+
+	return matcher(0)
 }
 
 func newChainedRuleMatcher(rules ...textlexer.Rule) func(r rune) (textlexer.Rule, textlexer.State) {
@@ -158,21 +208,18 @@ func newChainedRuleMatcher(rules ...textlexer.Rule) func(r rune) (textlexer.Rule
 
 		start = func(r rune) (textlexer.Rule, textlexer.State) {
 			var state textlexer.State
-			stdlog.Printf("idx: %d, start: %q\n", idx, r)
 
 			if next == nil {
 				next = rule
 			}
 
 			next, state = next(r)
-			stdlog.Printf("next: %v, state: %s\n", next, state)
 
 			if state == textlexer.StatePushBack {
 				if next == nil {
 					next = rule
 				}
 				next, state = next(r) // consume the pushback
-				stdlog.Printf("AFTER PUSHBACK: next: %v, state: %s\n", next, state)
 				if state == textlexer.StateAccept {
 					if idx+1 < len(rules) {
 						return matcher(idx + 1)(r)
@@ -183,7 +230,6 @@ func newChainedRuleMatcher(rules ...textlexer.Rule) func(r rune) (textlexer.Rule
 
 			if state == textlexer.StateAccept {
 				if idx+1 < len(rules) {
-					stdlog.Printf("idx+1: %d, len(rules): %d\n", idx+1, len(rules))
 					return matcher(idx + 1), textlexer.StateContinue
 				}
 				return nil, textlexer.StateAccept
@@ -209,89 +255,6 @@ func newChainedRuleMatcher(rules ...textlexer.Rule) func(r rune) (textlexer.Rule
 	return func(r rune) (textlexer.Rule, textlexer.State) {
 		return matcher(0)(r)
 	}
-
-	/*
-		return func(r rune) (textlexer.Rule, textlexer.State) {
-			var matcher textlexer.Rule
-
-			var next textlexer.Rule
-
-			offset := 0
-
-			matcher = func(r rune) (textlexer.Rule, textlexer.State) {
-				var state textlexer.State
-
-				if offset >= len(rules) {
-					stdlog.Printf("matcher: already ran through all rules")
-					// already ran through all rules
-					return nil, textlexer.StateReject
-				}
-
-				if next == nil {
-					stdlog.Printf("rule was reset, offset: %d\n", offset)
-					next = rules[offset]
-				}
-
-				next, state = next(r)
-				stdlog.Printf("next: %v, state: %s\n", next, state)
-
-				pushedBack := false
-				if state == textlexer.StatePushBack {
-					stdlog.Printf("pushed back after reading %q\n", r)
-
-					return matcher, textlexer.StatePushBack
-
-					// consume the pushback
-					next, state = next(r)
-					if state == textlexer.StateReject {
-						return nil, textlexer.StateReject
-					}
-
-					stdlog.Printf("AFTER PUSHBACK: next: %v, state: %s\n", next, state)
-					if state == textlexer.StateAccept {
-						return PushBackCurrentAndAccept(r)
-					}
-
-					pushedBack = true
-				}
-
-				if state == textlexer.StateContinue {
-					if IsEOF(r) {
-						return nil, textlexer.StateReject
-					}
-
-					return matcher, textlexer.StateContinue
-				}
-
-				if state == textlexer.StateAccept {
-					offset++
-
-					if offset < len(rules) {
-						stdlog.Printf("advanced to next rule: %d\n", offset)
-						// there are more rules to process
-						next = nil
-						return matcher, textlexer.StateContinue
-					}
-
-					if pushedBack {
-						stdlog.Printf("pushed back, accepting")
-						return PushBackCurrentAndAccept(r)
-					}
-
-					stdlog.Printf("processed all rules, accepting")
-					return nil, textlexer.StateAccept
-				}
-
-				if state == textlexer.StateReject {
-					return nil, textlexer.StateReject
-				}
-
-				panic("unexpected state from inner rule " + state.String())
-			}
-
-			return matcher(r)
-		}
-	*/
 }
 
 // newReverseStateMatcher creates a matcher that reverses the state of the
@@ -600,141 +563,46 @@ func NewMatchAnyRule(rules ...textlexer.Rule) func(r rune) (textlexer.Rule, text
 	return newAnyOfRulesMatcher(rules...)
 }
 
-/*
-// NewMatchWithLookahead creates a rule that matches if the main rule matches
-// and is followed by a pattern that matches the lookahead rule. The lookahead
+// NewLookaheadMatcher creates a rule that matches if the main rule matches and
+// is followed by a pattern that matches the lookahead rule. The lookahead
 // pattern is not consumed.
-//
-// Cases:
-// +-----------+-----------------+-------------------------+
-// | mainRule  | lookaheadRule   | final                   |
-// +-----------+-----------------+-------------------------+
-// | Accept    | Accept          | Accept -> Reject        |
-// | Accept    | Reject          | Accept -> Backtrack     |
-// | Reject    | -               | Reject                  |
-// | Continue  | -               | Continue                |
-// | Backtrack | -               | Backtrack               |
-// +-----------+-----------------+-------------------------+
-func NewMatchWithLookahead(mainRule, lookaheadRule textlexer.Rule) func(r rune) (textlexer.Rule, textlexer.State) {
-	debug := func(msg string, args ...interface{}) {
-		stdlog.Printf("##### NewMatchWithLookahead: "+msg, args...)
-	}
+func NewLookaheadMatcher(mainRule, lookaheadRule textlexer.Rule) func(r rune) (textlexer.Rule, textlexer.State) {
+	return func(r rune) (textlexer.Rule, textlexer.State) {
+		var lookaheadWrapper func(textlexer.Rule) func(rune) (textlexer.Rule, textlexer.State)
 
-	newBacktrackMatcher := func(next textlexer.Rule, offset int) func(r rune) (textlexer.Rule, textlexer.State) {
-		var matcher textlexer.Rule
-
-		debug("newBacktrackMatcher: offset: %d\n", offset)
-
-		matcher = func(r rune) (textlexer.Rule, textlexer.State) {
-			if offset <= 0 {
-				return nil, textlexer.StateAccept
-			}
-
-			offset--
-
-			return matcher, textlexer.StateContinue
-		}
-
-		return matcher
-	}
-
-	newLookaheadMatcher := func(next textlexer.Rule, offset int) func(r rune) (textlexer.Rule, textlexer.State) {
-		var state textlexer.State
-		var matcher textlexer.Rule
-
-		matcher = func(r rune) (textlexer.Rule, textlexer.State) {
-			debug("lookaheadMatcher: r: %q\n", r)
-
-			if next == nil {
-				panic("lookaheadMatcher: next is nil")
-			}
-
-			next, state = next(r)
-
-			if state == textlexer.StateContinue {
-				return matcher, textlexer.StateContinue
-			}
-
-			for next != nil && state == textlexer.StateAccept {
-				next, state = next(r)
-			}
-
-			for next != nil && state == textlexer.StateReject {
-				panic("lookaheadMatcher: reject panik")
-				next, state = next(r)
-			}
-
-			if state == textlexer.StateAccept {
-				debug("!!!!!! lookaheadMatcher: accepted")
-				return newBacktrackMatcher(mainRule, offset), textlexer.StateBacktrack
-			}
-
-			if next == nil {
-				debug("lookaheadMatcher: final state, next is nil\n")
-				return nil, state
-			}
-
-			return matcher, state
-		}
-
-		return matcher
-	}
-
-	newMainRuleMatcher := func(next textlexer.Rule) func(r rune) (textlexer.Rule, textlexer.State) {
 		var offset int
 
-		var state textlexer.State
-		var matcher textlexer.Rule
-
-		matcher = func(r rune) (textlexer.Rule, textlexer.State) {
-			debug("mainRuleMatcher: r: %q\n", r)
-
-			if next == nil {
-				panic("mainRule: next is nil")
+		lookaheadWrapper = func(rule textlexer.Rule) func(r rune) (textlexer.Rule, textlexer.State) {
+			return func(r rune) (textlexer.Rule, textlexer.State) {
+				next, state := rule(r)
+				if state == textlexer.StatePushBack {
+					offset--
+				}
+				if state == textlexer.StateContinue || state == textlexer.StateAccept {
+					offset++
+				}
+				return lookaheadWrapper(next), state
 			}
-
-			next, state = next(r)
-
-			if state == textlexer.StateContinue {
-				offset++
-
-				return matcher, textlexer.StateContinue
-			}
-
-			if state == textlexer.StateBacktrack {
-				offset = 0 // discard the offset
-				return matcher, textlexer.StateBacktrack
-			}
-
-			for next != nil && state == textlexer.StateReject {
-				next, state = next(r)
-			}
-
-			if state == textlexer.StateReject {
-				return nil, textlexer.StateReject
-			}
-
-			for next != nil && state == textlexer.StateAccept {
-				next, state = next(r)
-			}
-
-			if state == textlexer.StateAccept {
-				debug("mainRuleMatcher: accepted, transitioning to lookaheadMatcher\n")
-				return newLookaheadMatcher(lookaheadRule, offset)(r)
-			}
-
-			if next == nil {
-				return nil, state
-			}
-
-			panic("mainRuleMatcher: unexpected state from inner rule " + state.String())
 		}
 
-		return matcher
-	}
+		lookaheadConsumer := newRuleConsumer(
+			lookaheadWrapper(lookaheadRule),
+			// on accept, backtrack to the main rule and accept
+			func(r rune) (textlexer.Rule, textlexer.State) {
+				return Backtrack(offset, textlexer.StateAccept)(r)
+			},
+			nil,
+		)
 
-	return func(r rune) (textlexer.Rule, textlexer.State) {
-		return newMainRuleMatcher(mainRule)(r)
+		mainConsumer := newRuleConsumer(
+			mainRule,
+			// on accept, continue with the lookahead consumer
+			func(r rune) (textlexer.Rule, textlexer.State) {
+				return lookaheadConsumer, textlexer.StateContinue
+			},
+			nil,
+		)
+
+		return mainConsumer(r)
 	}
 }
-*/

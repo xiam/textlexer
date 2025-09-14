@@ -1,5 +1,7 @@
 package textlexer
 
+import "fmt"
+
 type State uint
 
 const (
@@ -33,12 +35,5 @@ func (s State) String() string {
 		return stateNames[s]
 	}
 
-	return "UnknownState"
+	return fmt.Sprintf("UnknownState(%d)", s)
 }
-
-type Rule func(r rune) (next Rule, state State)
-
-const (
-	RuneEOF = rune(-1)
-	RuneBOF = rune(-2)
-)

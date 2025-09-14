@@ -6,24 +6,35 @@ import (
 	"sync"
 )
 
+const (
+	RuneEOF = rune(-1)
+	RuneBOF = rune(-2)
+)
+
 type Reader interface {
 	io.RuneReader
 	io.Seeker
 }
 
 type TextLexer struct {
-	r Reader
+	reader Reader
 
 	offset int
 
+	buf []rune
+	w   int
+	r   int
+
+	mu sync.Mutex
+
 	rules    []LexemeType
-	rulesMu  sync.Mutex
 	rulesMap map[LexemeType]Rule
+	rulesMu  sync.Mutex
 }
 
 func New(r Reader) *TextLexer {
 	return &TextLexer{
-		r:        r,
+		reader:   r,
 		rules:    []LexemeType{},
 		rulesMap: map[LexemeType]Rule{},
 	}
@@ -49,103 +60,172 @@ func (lx *TextLexer) MustAddRule(lexType LexemeType, lexRule Rule) {
 }
 
 func (lx *TextLexer) Next() (*Lexeme, error) {
+	typ, text, err := lx.nextLexeme()
+	if err != nil {
+		return nil, err
+	}
+
+	lex := NewLexeme(typ, text, lx.offset)
+
+	// update offset
+	lx.offset += lx.r
+
+	// compact buffer
+	lx.buf = lx.buf[lx.r:]
+	lx.w -= lx.r
+	lx.r = 0
+
+	return lex, nil
+}
+
+func (lx *TextLexer) nextLexeme() (LexemeType, string, error) {
 	scanners := map[LexemeType]Rule{}
+	rules := []LexemeType{}
 
 	lx.rulesMu.Lock()
 	for _, lexType := range lx.rules {
+		rules = append(rules, lexType) // it's important to preserve order
 		scanners[lexType] = lx.rulesMap[lexType]
 	}
 	lx.rulesMu.Unlock()
 
-	var lastLexeme *Lexeme
-	var isEOF bool
+	scanner := newRuleScanner(rules, scanners)
 
-	var buf []rune
-
-	offset := 0
 	for {
 
-		r, _, err := lx.r.ReadRune()
-		if err != nil && err != io.EOF {
-			return nil, fmt.Errorf("read error: %v", err)
-		}
-
-		isEOF = err == io.EOF
-		if isEOF {
-			r = RuneEOF
-		}
-
-		if len(buf) == 0 && r == RuneEOF {
-			return nil, io.EOF
-		}
-
-		for _, lexType := range lx.rules {
-			scanner := scanners[lexType]
-			if scanner == nil {
-				continue
-			}
-
-			next, state := scanner(r)
-			scanners[lexType] = next
-
-			if state == StateReject {
-				delete(scanners, lexType)
-			}
-
-			if state == StateAccept {
-				delete(scanners, lexType)
-
-				// TODO: review
-				if offset > 0 {
-					lastLexeme = &Lexeme{
-						typ:    lexType,
-						text:   buf,
-						offset: lx.offset + offset,
-					}
-				} else {
-					lastLexeme = &Lexeme{
-						typ:    lexType,
-						text:   []rune{r},
-						offset: lx.offset + 1,
-					}
+		var r rune
+		if lx.r < lx.w {
+			r = lx.buf[lx.r]
+			lx.r++
+		} else {
+			var err error
+			r, _, err = lx.reader.ReadRune()
+			if err != nil {
+				if err != io.EOF {
+					return LexemeTypeUnknown, "", fmt.Errorf("read rune: %v", err)
 				}
+				r = RuneEOF
+			}
+			lx.buf = append(lx.buf, r)
+			lx.w++
+			lx.r++
+		}
+
+		matchType, matchLen := scanner.Scan(r)
+		if matchLen < 0 {
+			continue
+		}
+
+		lx.r = matchLen
+
+		if matchType == LexemeTypeUnknown && r == RuneEOF {
+			return LexemeTypeUnknown, "", io.EOF
+		}
+
+		return matchType, string(lx.buf[:lx.r]), nil
+	}
+}
+
+type ruleState struct {
+	rule       Rule
+	lastAccept int
+	isActive   bool
+}
+
+type ruleScanner struct {
+	rules  []LexemeType
+	states map[LexemeType]*ruleState
+
+	buf []rune
+}
+
+func newRuleScanner(rules []LexemeType, scanners map[LexemeType]Rule) *ruleScanner {
+	if len(scanners) != len(rules) {
+		panic("scanners and rules length mismatch")
+	}
+
+	states := map[LexemeType]*ruleState{}
+	for _, typ := range rules {
+		if scanners[typ] == nil {
+			panic(fmt.Sprintf("scanner for rule %q is nil", typ))
+		}
+		states[typ] = &ruleState{
+			rule:       scanners[typ],
+			lastAccept: -1,
+			isActive:   true,
+		}
+	}
+
+	return &ruleScanner{
+		rules:  rules,
+		states: states,
+
+		buf: []rune{},
+	}
+}
+
+func (rs *ruleScanner) Scan(r rune) (LexemeType, int) {
+	rs.buf = append(rs.buf, r)
+
+	activeScanners := 0
+
+	for _, typ := range rs.rules {
+		var pushbacks int
+
+		scanner := rs.states[typ]
+		if !scanner.isActive {
+			continue
+		}
+
+		next, state := scanner.rule(r)
+		for state == StatePushBack {
+			pushbacks++
+			if next != nil && pushbacks <= len(rs.buf) {
+				next, state = next(rs.buf[len(rs.buf)-pushbacks])
+			} else {
+				next, state = nil, StateReject
 			}
 		}
 
-		buf = append(buf, r)
-		offset++
+		// update state
+		if next == nil {
+			scanner.isActive = false
+		} else {
+			scanner.rule = next
+			activeScanners++
+		}
 
-		if len(scanners) == 0 || isEOF {
-			// no scanners left
-			break
+		switch state {
+		case StateReject:
+			scanner.isActive = false
+		case StateContinue:
+			// keep going
+		case StateAccept:
+			// keep going, but remember last accept position
+			scanner.lastAccept = len(rs.buf) - pushbacks
+		default:
+			panic(fmt.Sprintf("unknown state: %v", state))
 		}
 	}
 
-	if lastLexeme != nil {
-		lx.offset = lastLexeme.offset
-
-		if _, err := lx.r.Seek(int64(lx.offset), io.SeekStart); err != nil {
-			return nil, fmt.Errorf("seek: %v", err)
-		}
-
-		return lastLexeme, nil
+	if activeScanners > 0 {
+		return LexemeTypeUnknown, -1
 	}
 
-	if !isEOF {
-		lastLexeme = &Lexeme{
-			typ:    LexemeTypeUnknown,
-			text:   buf,
-			offset: lx.offset + offset,
+	bestMatch := LexemeTypeUnknown
+	bestMatchLen := -1
+
+	for _, typ := range rs.rules {
+		scanner := rs.states[typ]
+		if scanner.lastAccept > bestMatchLen {
+			bestMatch = typ
+			bestMatchLen = scanner.lastAccept
 		}
-
-		lx.offset = lastLexeme.offset
-
-		if _, err := lx.r.Seek(int64(lx.offset), io.SeekStart); err != nil {
-			return nil, fmt.Errorf("seek: %v", err)
-		}
-
-		return lastLexeme, nil
 	}
 
-	return nil, io.EOF
+	if bestMatch == LexemeTypeUnknown {
+		return LexemeTypeUnknown, len(rs.buf)
+	}
+
+	return bestMatch, bestMatchLen
 }
