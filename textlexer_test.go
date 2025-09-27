@@ -138,9 +138,19 @@ func matchAnyOf(ss ...string) textlexer.Rule {
 			var nextOverallState textlexer.State = textlexer.StateReject
 
 			for _, sc := range activeScanners {
+				// Defensive check: A completed sub-match might have a nil rule.
+				if sc.rule == nil {
+					continue
+				}
+
 				nextRule, state := sc.rule(nextSym)
 				if state != textlexer.StateReject {
-					nextActiveScanners = append(nextActiveScanners, &scanner{rule: nextRule})
+					// *** FIX: Only add a scanner to the next state if its rule is not nil. ***
+					// This prevents a nil dereference on the next symbol.
+					if nextRule != nil {
+						nextActiveScanners = append(nextActiveScanners, &scanner{rule: nextRule})
+					}
+
 					if state == textlexer.StateAccept {
 						nextOverallState = textlexer.StateAccept
 					} else if nextOverallState != textlexer.StateAccept {
@@ -150,7 +160,10 @@ func matchAnyOf(ss ...string) textlexer.Rule {
 			}
 
 			if len(nextActiveScanners) == 0 {
-				return nil, textlexer.StateReject
+				// If no scanners can continue, the composite rule is done.
+				// Return nil for the next rule. The overall state (Accept/Reject)
+				// will be determined by what was last seen.
+				return nil, nextOverallState
 			}
 			activeScanners = nextActiveScanners
 			return nextCompositeRule, nextOverallState
@@ -409,18 +422,18 @@ func TestLexerProcessor(t *testing.T) {
 				lx.MustAddRule(lexTypeInteger, unsignedIntegerRule)
 			},
 			expectedLexemes: []*textlexer.Lexeme{
-				textlexer.NewLexeme(lexTypeWhitespace, "  ", 0),
-				textlexer.NewLexeme(lexTypeFloat, "12.3", 2),
-				textlexer.NewLexeme(lexTypeWhitespace, "  \t   ", 6),
-				textlexer.NewLexeme(lexTypeInteger, "4", 12),
-				textlexer.NewLexeme(lexTypeWhitespace, " ", 13),
-				textlexer.NewLexeme(lexTypeFloat, "5.6", 14),
-				textlexer.NewLexeme(lexTypeWhitespace, " \t ", 17),
-				textlexer.NewLexeme(lexTypeInteger, "7", 20),
-				textlexer.NewLexeme(lexTypeWhitespace, "\n ", 21),
-				textlexer.NewLexeme(lexTypeInteger, "8", 23),
-				textlexer.NewLexeme(lexTypeWhitespace, " ", 24),
-				textlexer.NewLexeme(lexTypeFloat, "9.0", 25),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, "  ", 0),
+				textlexer.NewLexemeFromString(lexTypeFloat, "12.3", 2),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, "  \t   ", 6),
+				textlexer.NewLexemeFromString(lexTypeInteger, "4", 12),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, " ", 13),
+				textlexer.NewLexemeFromString(lexTypeFloat, "5.6", 14),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, " \t ", 17),
+				textlexer.NewLexemeFromString(lexTypeInteger, "7", 20),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, "\n ", 21),
+				textlexer.NewLexemeFromString(lexTypeInteger, "8", 23),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, " ", 24),
+				textlexer.NewLexemeFromString(lexTypeFloat, "9.0", 25),
 			},
 		},
 		{
@@ -429,7 +442,7 @@ func TestLexerProcessor(t *testing.T) {
 			setupRules: func(lx *textlexer.TextLexer) {
 				commentRule := func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 					// This comment rule only matches '#' if it's at the beginning of a line.
-					if !textlexer.IsBOL(s) || s.Rune() != '#' {
+					if !s.IsBOL() || s.Rune() != '#' {
 						return nil, textlexer.StateReject
 					}
 
@@ -442,7 +455,7 @@ func TestLexerProcessor(t *testing.T) {
 					var loop textlexer.Rule
 					loop = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 						// Consume until EOL or EOF, then pushback to not include the terminator.
-						if textlexer.IsEOL(s) || textlexer.IsEOF(s) {
+						if s.IsEOL() || s.IsEOF() {
 							return acceptorRule, textlexer.StatePushBack
 						}
 						return loop, textlexer.StateContinue
@@ -456,16 +469,16 @@ func TestLexerProcessor(t *testing.T) {
 				lx.MustAddRule(lexTypeIdentifier, newIdentifierRule())
 			},
 			expectedLexemes: []*textlexer.Lexeme{
-				textlexer.NewLexeme(lexTypeWhitespace, "  ", 0),
-				textlexer.NewLexeme(lexTypeHash, "#", 2),
-				textlexer.NewLexeme(lexTypeWhitespace, " ", 3),
-				textlexer.NewLexeme(lexTypeIdentifier, "not", 4),
-				textlexer.NewLexeme(lexTypeWhitespace, " ", 7),
-				textlexer.NewLexeme(lexTypeIdentifier, "a", 8),
-				textlexer.NewLexeme(lexTypeWhitespace, " ", 9),
-				textlexer.NewLexeme(lexTypeIdentifier, "comment", 10),
-				textlexer.NewLexeme(lexTypeWhitespace, "\n", 17),
-				textlexer.NewLexeme(lexTypeComment, "# a comment", 18),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, "  ", 0),
+				textlexer.NewLexemeFromString(lexTypeHash, "#", 2),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, " ", 3),
+				textlexer.NewLexemeFromString(lexTypeIdentifier, "not", 4),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, " ", 7),
+				textlexer.NewLexemeFromString(lexTypeIdentifier, "a", 8),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, " ", 9),
+				textlexer.NewLexemeFromString(lexTypeIdentifier, "comment", 10),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, "\n", 17),
+				textlexer.NewLexemeFromString(lexTypeComment, "# a comment", 18),
 			},
 		},
 		{
@@ -483,9 +496,9 @@ func TestLexerProcessor(t *testing.T) {
 				lx.MustAddRule(lexTypeInteger, unsignedIntegerRule)
 			},
 			expectedLexemes: []*textlexer.Lexeme{
-				textlexer.NewLexeme(textlexer.LexemeTypeUnknown, "a", 0),
-				textlexer.NewLexeme(textlexer.LexemeTypeUnknown, "b", 1),
-				textlexer.NewLexeme(textlexer.LexemeTypeUnknown, "c", 2),
+				textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "a", 0),
+				textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "b", 1),
+				textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "c", 2),
 			},
 		},
 		{
@@ -496,7 +509,7 @@ func TestLexerProcessor(t *testing.T) {
 				lx.MustAddRule(lexTypeFloat, unsignedFloatRule)
 			},
 			expectedLexemes: []*textlexer.Lexeme{
-				textlexer.NewLexeme(lexTypeFloat, "12.345", 0),
+				textlexer.NewLexemeFromString(lexTypeFloat, "12.345", 0),
 			},
 		},
 		{
@@ -507,7 +520,7 @@ func TestLexerProcessor(t *testing.T) {
 				lx.MustAddRule(lexTypeInteger, unsignedIntegerRule)
 			},
 			expectedLexemes: []*textlexer.Lexeme{
-				textlexer.NewLexeme(lexTypeFloat, "42.", 0),
+				textlexer.NewLexemeFromString(lexTypeFloat, "42.", 0),
 			},
 		},
 		{
@@ -518,8 +531,8 @@ func TestLexerProcessor(t *testing.T) {
 				lx.MustAddRule(lexTypeInteger, unsignedIntegerRule)
 			},
 			expectedLexemes: []*textlexer.Lexeme{
-				textlexer.NewLexeme(lexTypeInteger, "42", 0),
-				textlexer.NewLexeme(textlexer.LexemeTypeUnknown, "a", 2),
+				textlexer.NewLexemeFromString(lexTypeInteger, "42", 0),
+				textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "a", 2),
 			},
 		},
 		{
@@ -529,7 +542,7 @@ func TestLexerProcessor(t *testing.T) {
 				lx.MustAddRule(lexTypeInteger, unsignedIntegerRule)
 			},
 			expectedLexemes: []*textlexer.Lexeme{
-				textlexer.NewLexeme(lexTypeInteger, "123", 0),
+				textlexer.NewLexemeFromString(lexTypeInteger, "123", 0),
 			},
 		},
 		{
@@ -541,9 +554,9 @@ func TestLexerProcessor(t *testing.T) {
 				lx.MustAddRule(lexTypeWhitespace, whitespaceRule)
 			},
 			expectedLexemes: []*textlexer.Lexeme{
-				textlexer.NewLexeme(lexTypeKeywordIF, "if", 0),
-				textlexer.NewLexeme(lexTypeWhitespace, " ", 2),
-				textlexer.NewLexeme(lexTypeIdentifier, "identifier", 3),
+				textlexer.NewLexemeFromString(lexTypeKeywordIF, "if", 0),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, " ", 2),
+				textlexer.NewLexemeFromString(lexTypeIdentifier, "identifier", 3),
 			},
 		},
 		{
@@ -554,7 +567,7 @@ func TestLexerProcessor(t *testing.T) {
 				lx.MustAddRule(lexTypeKeywordIF, matchString("if"))
 			},
 			expectedLexemes: []*textlexer.Lexeme{
-				textlexer.NewLexeme(lexTypeIdentifier, "if", 0),
+				textlexer.NewLexemeFromString(lexTypeIdentifier, "if", 0),
 			},
 		},
 		{
@@ -564,11 +577,11 @@ func TestLexerProcessor(t *testing.T) {
 				lx.MustAddRule(lexTypeInteger, unsignedIntegerRule)
 			},
 			expectedLexemes: []*textlexer.Lexeme{
-				textlexer.NewLexeme(lexTypeInteger, "123", 0),
-				textlexer.NewLexeme(textlexer.LexemeTypeUnknown, "\n", 3),
-				textlexer.NewLexeme(textlexer.LexemeTypeUnknown, "世", 4),
-				textlexer.NewLexeme(textlexer.LexemeTypeUnknown, "界", 5),
-				textlexer.NewLexeme(lexTypeInteger, "456", 6),
+				textlexer.NewLexemeFromString(lexTypeInteger, "123", 0),
+				textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "\n", 3),
+				textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "世", 4),
+				textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "界", 5),
+				textlexer.NewLexemeFromString(lexTypeInteger, "456", 6),
 			},
 		},
 		{
@@ -579,8 +592,8 @@ func TestLexerProcessor(t *testing.T) {
 				lx.MustAddRule(lexTypeInteger, unsignedIntegerRule)
 			},
 			expectedLexemes: []*textlexer.Lexeme{
-				textlexer.NewLexeme(lexTypeFloat, "1.2", 0),
-				textlexer.NewLexeme(lexTypeFloat, ".3", 3),
+				textlexer.NewLexemeFromString(lexTypeFloat, "1.2", 0),
+				textlexer.NewLexemeFromString(lexTypeFloat, ".3", 3),
 			},
 		},
 		{
@@ -592,12 +605,12 @@ func TestLexerProcessor(t *testing.T) {
 				lx.MustAddRule(textlexer.LexemeType("SYMBOL"), newSymbolRule())
 			},
 			expectedLexemes: []*textlexer.Lexeme{
-				textlexer.NewLexeme(textlexer.LexemeType("SIGNED_INT"), "-12", 0),
-				textlexer.NewLexeme(textlexer.LexemeType("SYMBOL"), "+", 3),
-				textlexer.NewLexeme(textlexer.LexemeType("SIGNED_INT"), "-3", 4),
-				textlexer.NewLexeme(textlexer.LexemeType("SYMBOL"), "+", 6),
-				textlexer.NewLexeme(textlexer.LexemeType("SIGNED_INT"), "+4", 7),
-				textlexer.NewLexeme(textlexer.LexemeType("SIGNED_INT"), "-5", 9),
+				textlexer.NewLexemeFromString(textlexer.LexemeType("SIGNED_INT"), "-12", 0),
+				textlexer.NewLexemeFromString(textlexer.LexemeType("SYMBOL"), "+", 3),
+				textlexer.NewLexemeFromString(textlexer.LexemeType("SIGNED_INT"), "-3", 4),
+				textlexer.NewLexemeFromString(textlexer.LexemeType("SYMBOL"), "+", 6),
+				textlexer.NewLexemeFromString(textlexer.LexemeType("SIGNED_INT"), "+4", 7),
+				textlexer.NewLexemeFromString(textlexer.LexemeType("SIGNED_INT"), "-5", 9),
 			},
 		},
 		{
@@ -614,24 +627,24 @@ func TestLexerProcessor(t *testing.T) {
 				lx.MustAddRule(textlexer.LexemeType("WHITESPACE"), newWhitespaceRule())
 			},
 			expectedLexemes: []*textlexer.Lexeme{
-				textlexer.NewLexeme(textlexer.LexemeType("SELECT"), "SELECT", 0),
-				textlexer.NewLexeme(textlexer.LexemeType("WHITESPACE"), " ", 6),
-				textlexer.NewLexeme(textlexer.LexemeType("SYMBOL"), "*", 7),
-				textlexer.NewLexeme(textlexer.LexemeType("WHITESPACE"), " ", 8),
-				textlexer.NewLexeme(textlexer.LexemeType("FROM"), "FROM", 9),
-				textlexer.NewLexeme(textlexer.LexemeType("WHITESPACE"), " ", 13),
-				textlexer.NewLexeme(textlexer.LexemeType("IDENTIFIER"), "users", 14),
-				textlexer.NewLexeme(textlexer.LexemeType("WHITESPACE"), " ", 19),
-				textlexer.NewLexeme(textlexer.LexemeType("WHERE"), "WHERE", 20),
-				textlexer.NewLexeme(textlexer.LexemeType("WHITESPACE"), " ", 25),
-				textlexer.NewLexeme(textlexer.LexemeType("IDENTIFIER"), "name", 26),
-				textlexer.NewLexeme(textlexer.LexemeType("WHITESPACE"), " ", 30),
-				textlexer.NewLexeme(textlexer.LexemeType("SYMBOL"), "=", 31),
-				textlexer.NewLexeme(textlexer.LexemeType("WHITESPACE"), " ", 32),
-				textlexer.NewLexeme(textlexer.LexemeType("STRING"), "'John Doe'", 33),
-				textlexer.NewLexeme(textlexer.LexemeType("WHITESPACE"), " ", 43),
-				textlexer.NewLexeme(textlexer.LexemeType("COMMENT"), "/* a comment */", 44),
-				textlexer.NewLexeme(textlexer.LexemeType("SYMBOL"), ";", 59),
+				textlexer.NewLexemeFromString(textlexer.LexemeType("SELECT"), "SELECT", 0),
+				textlexer.NewLexemeFromString(textlexer.LexemeType("WHITESPACE"), " ", 6),
+				textlexer.NewLexemeFromString(textlexer.LexemeType("SYMBOL"), "*", 7),
+				textlexer.NewLexemeFromString(textlexer.LexemeType("WHITESPACE"), " ", 8),
+				textlexer.NewLexemeFromString(textlexer.LexemeType("FROM"), "FROM", 9),
+				textlexer.NewLexemeFromString(textlexer.LexemeType("WHITESPACE"), " ", 13),
+				textlexer.NewLexemeFromString(textlexer.LexemeType("IDENTIFIER"), "users", 14),
+				textlexer.NewLexemeFromString(textlexer.LexemeType("WHITESPACE"), " ", 19),
+				textlexer.NewLexemeFromString(textlexer.LexemeType("WHERE"), "WHERE", 20),
+				textlexer.NewLexemeFromString(textlexer.LexemeType("WHITESPACE"), " ", 25),
+				textlexer.NewLexemeFromString(textlexer.LexemeType("IDENTIFIER"), "name", 26),
+				textlexer.NewLexemeFromString(textlexer.LexemeType("WHITESPACE"), " ", 30),
+				textlexer.NewLexemeFromString(textlexer.LexemeType("SYMBOL"), "=", 31),
+				textlexer.NewLexemeFromString(textlexer.LexemeType("WHITESPACE"), " ", 32),
+				textlexer.NewLexemeFromString(textlexer.LexemeType("STRING"), "'John Doe'", 33),
+				textlexer.NewLexemeFromString(textlexer.LexemeType("WHITESPACE"), " ", 43),
+				textlexer.NewLexemeFromString(textlexer.LexemeType("COMMENT"), "/* a comment */", 44),
+				textlexer.NewLexemeFromString(textlexer.LexemeType("SYMBOL"), ";", 59),
 			},
 		},
 		{
@@ -665,7 +678,7 @@ func TestLexerProcessor(t *testing.T) {
 			},
 			// The ruleProcessor should have a safety limit on pushbacks.
 			expectedLexemes: []*textlexer.Lexeme{
-				textlexer.NewLexeme(textlexer.LexemeTypeUnknown, "a", 0),
+				textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "a", 0),
 			},
 		},
 		{
@@ -678,7 +691,7 @@ func TestLexerProcessor(t *testing.T) {
 			expectedLexemes: func() []*textlexer.Lexeme {
 				lexemes := make([]*textlexer.Lexeme, 5000)
 				for i := 0; i < 5000; i++ {
-					lexemes[i] = textlexer.NewLexeme(textlexer.LexemeTypeUnknown, "€", i)
+					lexemes[i] = textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "€", i)
 				}
 				return lexemes
 			}(),
@@ -695,7 +708,7 @@ func TestLexerProcessor(t *testing.T) {
 				lx.MustAddRule(lexTypeLoop, zeroLengthRule)
 			},
 			expectedLexemes: []*textlexer.Lexeme{
-				textlexer.NewLexeme(textlexer.LexemeTypeUnknown, "a", 0),
+				textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "a", 0),
 			},
 		},
 		{
@@ -711,9 +724,9 @@ func TestLexerProcessor(t *testing.T) {
 			},
 			// The processor's pushback limit should prevent an infinite loop.
 			expectedLexemes: []*textlexer.Lexeme{
-				textlexer.NewLexeme(textlexer.LexemeTypeUnknown, "a", 0),
-				textlexer.NewLexeme(textlexer.LexemeTypeUnknown, "b", 1),
-				textlexer.NewLexeme(textlexer.LexemeTypeUnknown, "c", 2),
+				textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "a", 0),
+				textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "b", 1),
+				textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "c", 2),
 			},
 		},
 		{
@@ -728,7 +741,7 @@ func TestLexerProcessor(t *testing.T) {
 				lx.MustAddRule(lexTypeLoop, badRule)
 			},
 			expectedLexemes: []*textlexer.Lexeme{
-				textlexer.NewLexeme(textlexer.LexemeTypeUnknown, "a", 0),
+				textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "a", 0),
 			},
 		},
 		{
@@ -753,8 +766,8 @@ func TestLexerProcessor(t *testing.T) {
 				lx.MustAddRule("EOF_CONTINUE", ruleAtEOF)
 			},
 			expectedLexemes: []*textlexer.Lexeme{
-				textlexer.NewLexeme(textlexer.LexemeTypeUnknown, "a", 0),
-				textlexer.NewLexeme(textlexer.LexemeTypeUnknown, "b", 1),
+				textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "a", 0),
+				textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "b", 1),
 			},
 		},
 		{
@@ -772,7 +785,7 @@ func TestLexerProcessor(t *testing.T) {
 				lx.MustAddRule("PUSHBACK_EOF", pushbackAtEOF)
 			},
 			expectedLexemes: []*textlexer.Lexeme{
-				textlexer.NewLexeme(textlexer.LexemeType("PUSHBACK_EOF"), "a", 0),
+				textlexer.NewLexemeFromString(textlexer.LexemeType("PUSHBACK_EOF"), "a", 0),
 			},
 		},
 	}
@@ -1264,8 +1277,8 @@ func TestLexerPathologicalRuleWithDeepBacktracking(t *testing.T) {
 			input:          "aaab",
 			backtrackDepth: 3,
 			expected: []*textlexer.Lexeme{
-				textlexer.NewLexeme(lexTypePathological, "aaa", 0),
-				textlexer.NewLexeme(lexTypeUnknown, "b", 3),
+				textlexer.NewLexemeFromString(lexTypePathological, "aaa", 0),
+				textlexer.NewLexemeFromString(lexTypeUnknown, "b", 3),
 			},
 		},
 		{
@@ -1273,8 +1286,8 @@ func TestLexerPathologicalRuleWithDeepBacktracking(t *testing.T) {
 			input:          "aaaaaaaab",
 			backtrackDepth: 8,
 			expected: []*textlexer.Lexeme{
-				textlexer.NewLexeme(lexTypePathological, "aaaaaaaa", 0),
-				textlexer.NewLexeme(lexTypeUnknown, "b", 8),
+				textlexer.NewLexemeFromString(lexTypePathological, "aaaaaaaa", 0),
+				textlexer.NewLexemeFromString(lexTypeUnknown, "b", 8),
 			},
 		},
 		{
@@ -1282,8 +1295,8 @@ func TestLexerPathologicalRuleWithDeepBacktracking(t *testing.T) {
 			input:          strings.Repeat("a", 100) + "b",
 			backtrackDepth: 100,
 			expected: []*textlexer.Lexeme{
-				textlexer.NewLexeme(lexTypePathological, strings.Repeat("a", 100), 0),
-				textlexer.NewLexeme(lexTypeUnknown, "b", 100),
+				textlexer.NewLexemeFromString(lexTypePathological, strings.Repeat("a", 100), 0),
+				textlexer.NewLexemeFromString(lexTypeUnknown, "b", 100),
 			},
 		},
 	}
@@ -1337,9 +1350,9 @@ func TestLexerWithInputContainingRuneEOF(t *testing.T) {
 	lx.MustAddRule(lexTypeID, identifierRule)
 
 	expected := []*textlexer.Lexeme{
-		textlexer.NewLexeme(lexTypeID, "hello", 0),
-		textlexer.NewLexeme(textlexer.LexemeTypeUnknown, string(textlexer.RuneEOF), 5),
-		textlexer.NewLexeme(lexTypeID, "world", 6),
+		textlexer.NewLexemeFromString(lexTypeID, "hello", 0),
+		textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, string(textlexer.RuneEOF), 5),
+		textlexer.NewLexemeFromString(lexTypeID, "world", 6),
 	}
 
 	var found []*textlexer.Lexeme
@@ -1563,7 +1576,7 @@ func TestLexerPathologicalRules(t *testing.T) {
 
 		// Expected: Rule A's lastAccept is 5, Rule B's is 4. The processor must pick the longest.
 		expected := []*textlexer.Lexeme{
-			textlexer.NewLexeme(lexTypeOdd, "aaaaa", 0),
+			textlexer.NewLexemeFromString(lexTypeOdd, "aaaaa", 0),
 		}
 
 		var found []*textlexer.Lexeme
@@ -1633,8 +1646,8 @@ func TestLexerPathologicalRules(t *testing.T) {
 		// attempt to backtrack to a shorter match is ignored. Since "Bait" was added
 		// first, it wins the tie for the longest match.
 		expected := []*textlexer.Lexeme{
-			textlexer.NewLexeme(lexTypeBait, "token", 0),
-			textlexer.NewLexeme(textlexer.LexemeTypeUnknown, ";", 5),
+			textlexer.NewLexemeFromString(lexTypeBait, "token", 0),
+			textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, ";", 5),
 		}
 
 		var found []*textlexer.Lexeme
@@ -1694,8 +1707,8 @@ func TestLexerPathologicalRules(t *testing.T) {
 		// The VETO rule's subsequent StateReject does not retroactively cancel
 		// its match. Since VETO was added first, it wins the tie.
 		expected := []*textlexer.Lexeme{
-			textlexer.NewLexeme(lexTypeVeto, "abc", 0),
-			textlexer.NewLexeme(textlexer.LexemeTypeUnknown, ";", 3),
+			textlexer.NewLexemeFromString(lexTypeVeto, "abc", 0),
+			textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, ";", 3),
 		}
 
 		var found []*textlexer.Lexeme
@@ -1732,8 +1745,8 @@ func TestLexerPathologicalRules(t *testing.T) {
 		lx.MustAddRule("A", matchString("a"))
 
 		expected := []*textlexer.Lexeme{
-			textlexer.NewLexeme(textlexer.LexemeType("A"), "a", 0),
-			textlexer.NewLexeme(textlexer.LexemeTypeUnknown, "b", 1),
+			textlexer.NewLexemeFromString(textlexer.LexemeType("A"), "a", 0),
+			textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "b", 1),
 		}
 
 		var found []*textlexer.Lexeme
@@ -1760,9 +1773,9 @@ func TestLexerPathologicalRules(t *testing.T) {
 		lx.MustAddRule(lexTypeReject, alwaysRejectRule)
 
 		expected := []*textlexer.Lexeme{
-			textlexer.NewLexeme(textlexer.LexemeTypeUnknown, "a", 0),
-			textlexer.NewLexeme(textlexer.LexemeTypeUnknown, "b", 1),
-			textlexer.NewLexeme(textlexer.LexemeTypeUnknown, "c", 2),
+			textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "a", 0),
+			textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "b", 1),
+			textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "c", 2),
 		}
 
 		var found []*textlexer.Lexeme
@@ -1789,9 +1802,9 @@ func TestLexerPathologicalRules(t *testing.T) {
 		lx.MustAddRule(lexTypeAccept, alwaysAcceptRule)
 
 		expected := []*textlexer.Lexeme{
-			textlexer.NewLexeme(lexTypeAccept, "a", 0),
-			textlexer.NewLexeme(lexTypeAccept, "b", 1),
-			textlexer.NewLexeme(lexTypeAccept, "c", 2),
+			textlexer.NewLexemeFromString(lexTypeAccept, "a", 0),
+			textlexer.NewLexemeFromString(lexTypeAccept, "b", 1),
+			textlexer.NewLexemeFromString(lexTypeAccept, "c", 2),
 		}
 
 		var found []*textlexer.Lexeme
@@ -1911,7 +1924,7 @@ func TestLexerPathologicalRules(t *testing.T) {
 		lx.MustAddRule(lexTypeCycle, ruleA)
 
 		expected := []*textlexer.Lexeme{
-			textlexer.NewLexeme(lexTypeCycle, "abc", 0),
+			textlexer.NewLexemeFromString(lexTypeCycle, "abc", 0),
 		}
 
 		var found []*textlexer.Lexeme

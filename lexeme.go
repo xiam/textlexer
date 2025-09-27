@@ -15,7 +15,16 @@ type Lexeme struct {
 }
 
 // NewLexeme creates and returns a new Lexeme.
-func NewLexeme(typ LexemeType, text string, offset int) *Lexeme {
+func NewLexeme(typ LexemeType, text []rune, offset int) *Lexeme {
+	return &Lexeme{
+		typ:    typ,
+		text:   text,
+		offset: offset,
+	}
+}
+
+// NewLexemeFromString creates and returns a new Lexeme from a string.
+func NewLexemeFromString(typ LexemeType, text string, offset int) *Lexeme {
 	return &Lexeme{
 		typ:    typ,
 		text:   []rune(text),

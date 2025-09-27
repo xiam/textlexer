@@ -8,7 +8,6 @@ import (
 
 const (
 	RuneEOF = rune(-1)
-	RuneBOF = rune(-2)
 )
 
 type Reader interface {
@@ -96,12 +95,12 @@ func (lx *TextLexer) Next() (*Lexeme, error) {
 	defer lx.mu.Unlock()
 
 	// The number of symbols consumed (n) is the single source of truth for all state updates.
-	typ, text, n, err := lx.nextLexeme()
+	typ, runes, n, err := lx.nextLexeme()
 	if err != nil {
 		return nil, err
 	}
 
-	lex := NewLexeme(typ, text, lx.offset)
+	lex := NewLexeme(typ, runes, lx.offset)
 
 	// Update our global offset by the number of symbols consumed.
 	lx.offset += n
@@ -143,10 +142,10 @@ func (lx *TextLexer) createSymbol(r rune, isEOF bool) Symbol {
 	return NewSymbol(r, flags)
 }
 
-func (lx *TextLexer) nextLexeme() (LexemeType, string, int, error) {
+func (lx *TextLexer) nextLexeme() (LexemeType, []rune, int, error) {
 	processor, err := lx.getProcessor()
 	if err != nil {
-		return LexemeTypeUnknown, "", 0, fmt.Errorf("processor: %w", err)
+		return LexemeTypeUnknown, nil, 0, fmt.Errorf("processor: %w", err)
 	}
 
 	startPos := lx.r
@@ -165,7 +164,7 @@ func (lx *TextLexer) nextLexeme() (LexemeType, string, int, error) {
 			r, _, readErr = lx.reader.ReadRune()
 			if readErr != nil {
 				if readErr != io.EOF {
-					return LexemeTypeUnknown, "", 0, fmt.Errorf("ReadRune: %w", readErr)
+					return LexemeTypeUnknown, nil, 0, fmt.Errorf("ReadRune: %w", readErr)
 				}
 				isEOF = true
 				r = RuneEOF
@@ -187,7 +186,7 @@ func (lx *TextLexer) nextLexeme() (LexemeType, string, int, error) {
 			if isEOF {
 				// Processor wants more input, but we are at EOF. This means no token
 				// can be formed from the remaining buffer.
-				return LexemeTypeUnknown, "", 0, fmt.Errorf("lexer: rule remained inconclusive at EOF")
+				return LexemeTypeUnknown, nil, 0, fmt.Errorf("lexer: rule remained inconclusive at EOF")
 			}
 			// We may continue processing with more input.
 			continue
@@ -198,24 +197,23 @@ func (lx *TextLexer) nextLexeme() (LexemeType, string, int, error) {
 				typ = LexemeTypeUnknown
 				textLen = 1 // Force consumption of one symbol.
 			} else if isEOF {
-				return LexemeTypeUnknown, "", 0, io.EOF
+				return LexemeTypeUnknown, nil, 0, io.EOF
 			} else {
-				return LexemeTypeUnknown, "", 0, fmt.Errorf("lexer: rule returned zero-length token")
+				return LexemeTypeUnknown, nil, 0, fmt.Errorf("lexer: rule returned zero-length token")
 			}
 		}
 
 		if isEOF && lx.r == startPos {
 			// We are at EOF and the processor did not consume any symbols.
-			return LexemeTypeUnknown, "", 0, io.EOF
+			return LexemeTypeUnknown, nil, 0, io.EOF
 		}
 
-		// Extract the text from the symbols
+		// Extract the runes from the symbols
 		symbols := lx.buf[startPos : startPos+textLen]
 		runes := make([]rune, len(symbols))
 		for i, s := range symbols {
 			runes[i] = s.Rune()
 		}
-		text := string(runes)
 
 		// The read pointer is now positioned at the end of the consumed token.
 		lx.r = startPos + textLen
@@ -230,6 +228,6 @@ func (lx *TextLexer) nextLexeme() (LexemeType, string, int, error) {
 			}
 		}
 
-		return typ, text, textLen, nil
+		return typ, runes, textLen, nil
 	}
 }
