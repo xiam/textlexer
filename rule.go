@@ -1,3 +1,3 @@
 package textlexer
 
-type Rule func(r rune) (next Rule, state State)
+type Rule func(s Symbol) (next Rule, state State)

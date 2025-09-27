@@ -18,9 +18,12 @@ type Reader interface {
 type TextLexer struct {
 	reader Reader
 
-	offset int
+	offset    int
+	lineNum   int
+	colNum    int
+	isNewLine bool
 
-	buf []rune
+	buf []Symbol
 	w   int
 	r   int
 
@@ -35,10 +38,13 @@ type TextLexer struct {
 
 func New(r Reader) *TextLexer {
 	return &TextLexer{
-		buf:      make([]rune, 0, 4096),
-		reader:   r,
-		rules:    []LexemeType{},
-		rulesMap: map[LexemeType]Rule{},
+		buf:       make([]Symbol, 0, 4096),
+		reader:    r,
+		rules:     []LexemeType{},
+		rulesMap:  map[LexemeType]Rule{},
+		lineNum:   1,
+		colNum:    0,
+		isNewLine: true, // First character is at beginning of line
 	}
 }
 
@@ -89,7 +95,7 @@ func (lx *TextLexer) Next() (*Lexeme, error) {
 	lx.mu.Lock()
 	defer lx.mu.Unlock()
 
-	// The number of runes consumed (n) is the single source of truth for all state updates.
+	// The number of symbols consumed (n) is the single source of truth for all state updates.
 	typ, text, n, err := lx.nextLexeme()
 	if err != nil {
 		return nil, err
@@ -97,15 +103,44 @@ func (lx *TextLexer) Next() (*Lexeme, error) {
 
 	lex := NewLexeme(typ, text, lx.offset)
 
-	// Update our global offset by the number of runes consumed.
+	// Update our global offset by the number of symbols consumed.
 	lx.offset += n
 
-	// compact the buffer by removing consumed runes.
+	// compact the buffer by removing consumed symbols.
 	lx.buf = lx.buf[n:]
 	lx.w = lx.w - n
 	lx.r = 0
 
 	return lex, nil
+}
+
+// createSymbol creates a Symbol with appropriate positional flags based on current lexer state.
+func (lx *TextLexer) createSymbol(r rune, isEOF bool) Symbol {
+	flags := uint(FlagNone)
+
+	// Set BOF flag for the very first symbol
+	if lx.offset == 0 && lx.r == 0 && lx.w == 0 {
+		flags |= FlagBOF
+	}
+
+	// Set BOL flag if we're at the beginning of a line
+	if lx.isNewLine {
+		flags |= FlagBOL
+		lx.isNewLine = false
+	}
+
+	// Set EOL flag if this is a newline character
+	if r == '\n' {
+		flags |= FlagEOL
+		lx.isNewLine = true
+	}
+
+	// Set EOF flag if this is the last symbol
+	if isEOF {
+		flags |= FlagEOF
+	}
+
+	return NewSymbol(r, flags)
 }
 
 func (lx *TextLexer) nextLexeme() (LexemeType, string, int, error) {
@@ -117,15 +152,16 @@ func (lx *TextLexer) nextLexeme() (LexemeType, string, int, error) {
 	startPos := lx.r
 
 	for {
-		var r rune
+		var sym Symbol
 		var isEOF bool
 
 		if lx.r < lx.w {
 			// Read from the existing buffer.
-			r = lx.buf[lx.r]
+			sym = lx.buf[lx.r]
 		} else {
 			// Buffer is exhausted, read from the underlying io.Reader.
 			var readErr error
+			var r rune
 			r, _, readErr = lx.reader.ReadRune()
 			if readErr != nil {
 				if readErr != io.EOF {
@@ -133,16 +169,19 @@ func (lx *TextLexer) nextLexeme() (LexemeType, string, int, error) {
 				}
 				isEOF = true
 				r = RuneEOF
-			} else {
-				lx.buf = append(lx.buf, r)
+			}
+
+			sym = lx.createSymbol(r, isEOF)
+			if !isEOF {
+				lx.buf = append(lx.buf, sym)
 				lx.w++
 			}
 		}
 
-		// Process the rune we just got.
-		typ, textLen := processor.Process(r)
+		// Process the symbol we just got.
+		typ, textLen := processor.Process(sym)
 
-		// `textLen` < 0 signals that the processor needs more runes to decide.
+		// `textLen` < 0 signals that the processor needs more symbols to decide.
 		if textLen < 0 {
 			lx.r++
 			if isEOF {
@@ -157,7 +196,7 @@ func (lx *TextLexer) nextLexeme() (LexemeType, string, int, error) {
 		if textLen == 0 {
 			if startPos < lx.w {
 				typ = LexemeTypeUnknown
-				textLen = 1 // Force consumption of one rune.
+				textLen = 1 // Force consumption of one symbol.
 			} else if isEOF {
 				return LexemeTypeUnknown, "", 0, io.EOF
 			} else {
@@ -166,15 +205,30 @@ func (lx *TextLexer) nextLexeme() (LexemeType, string, int, error) {
 		}
 
 		if isEOF && lx.r == startPos {
-			// We are at EOF and the processor did not consume any runes.
+			// We are at EOF and the processor did not consume any symbols.
 			return LexemeTypeUnknown, "", 0, io.EOF
 		}
 
-		// The number of runes to consume is the length returned by the processor.
-		text := string(lx.buf[startPos : startPos+textLen])
+		// Extract the text from the symbols
+		symbols := lx.buf[startPos : startPos+textLen]
+		runes := make([]rune, len(symbols))
+		for i, s := range symbols {
+			runes[i] = s.Rune()
+		}
+		text := string(runes)
 
 		// The read pointer is now positioned at the end of the consumed token.
 		lx.r = startPos + textLen
+
+		// Update line and column tracking
+		for _, s := range symbols {
+			if s.Rune() == '\n' {
+				lx.lineNum++
+				lx.colNum = 0
+			} else {
+				lx.colNum++
+			}
+		}
 
 		return typ, text, textLen, nil
 	}
