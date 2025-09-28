@@ -115,17 +115,21 @@ func (lx *TextLexer) Next() (*Lexeme, error) {
 }
 
 func (lx *TextLexer) getProcessor() (*rulesProcessor, error) {
+	// Fast path: Check for existing processor with a read lock.
 	lx.rulesMu.RLock()
-	if lx.processor != nil {
-		lx.rulesMu.RUnlock()
-		lx.processor.Reset()
-		return lx.processor, nil
-	}
+	p := lx.processor
 	lx.rulesMu.RUnlock()
 
+	if p != nil {
+		p.Reset()
+		return p, nil
+	}
+
+	// Slow path: Acquire a write lock to create the processor.
 	lx.rulesMu.Lock()
 	defer lx.rulesMu.Unlock()
 
+	// Double-check in case another goroutine created it while we were waiting for the lock.
 	if lx.processor != nil {
 		lx.processor.Reset()
 		return lx.processor, nil
@@ -135,7 +139,6 @@ func (lx *TextLexer) getProcessor() (*rulesProcessor, error) {
 		return nil, fmt.Errorf("no rules defined")
 	}
 	lx.processor = newRulesProcessor(lx.rules, lx.rulesMap)
-	lx.processor.Reset()
 	return lx.processor, nil
 }
 
