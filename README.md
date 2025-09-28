@@ -25,9 +25,7 @@ by one.
 
 Let's find all the keywords and words in the phrase "say hello to the world".
 
-Here is a snippet showing the core logic. **For a complete, runnable program
-including the rule helper functions, please see the file at
-[./internal/examples/hello/main.go](`internal/examples/hello/main.go`).**
+Here is a snippet showing the core logic.
 
 ```go
 package main
@@ -74,6 +72,10 @@ func main() {
 	}
 }
 ```
+
+For a complete, runnable program including the rule helper functions, please
+see the file at
+[internal/examples/hello/main.go](./internal/examples/hello/main.go).
 
 #### Output:
 
