@@ -1,3 +1,10 @@
+// Package textlexer provides a flexible, rule-based engine for lexical analysis.
+//
+// A Rule is a state-transition function that processes input one Symbol at a
+// time. The lexer runs all defined rules in parallel, buffering input until
+// all rules have either rejected the input or terminated. It then selects the
+// longest valid match as the next lexeme.
+// If multiple rules match the same longest text, the one added first is chosen.
 package textlexer
 
 import (
@@ -7,19 +14,20 @@ import (
 )
 
 const (
+	// RuneEOF represents the end-of-file marker as a rune.
 	RuneEOF = rune(-1)
 )
 
-type Reader interface {
-	io.RuneReader
-}
-
+// TextLexer orchestrates the tokenization of an input stream according to a
+// set of user-defined rules. It manages input buffering, state tracking (line
+// and column numbers), and the rule processing engine.
 type TextLexer struct {
-	reader Reader
+	reader io.RuneReader
 
-	offset    int
-	lineNum   int
-	colNum    int
+	offset  int
+	lineNum int
+	colNum  int
+
 	isNewLine bool
 
 	buf []Symbol
@@ -30,38 +38,27 @@ type TextLexer struct {
 
 	rules    []LexemeType
 	rulesMap map[LexemeType]Rule
-	rulesMu  sync.Mutex
+	rulesMu  sync.RWMutex
 
 	processor *rulesProcessor
 }
 
-func New(r Reader) *TextLexer {
+// New creates a new TextLexer that reads from the provided io.RuneReader.
+func New(rr io.RuneReader) *TextLexer {
 	return &TextLexer{
 		buf:       make([]Symbol, 0, 4096),
-		reader:    r,
+		reader:    rr,
 		rules:     []LexemeType{},
 		rulesMap:  map[LexemeType]Rule{},
 		lineNum:   1,
 		colNum:    0,
-		isNewLine: true, // First character is at beginning of line
+		isNewLine: true,
 	}
 }
 
-func (lx *TextLexer) getProcessor() (*rulesProcessor, error) {
-	lx.rulesMu.Lock()
-	defer lx.rulesMu.Unlock()
-
-	if lx.processor == nil {
-		if len(lx.rules) == 0 {
-			return nil, fmt.Errorf("no rules defined")
-		}
-		lx.processor = newRulesProcessor(lx.rules, lx.rulesMap)
-	}
-
-	lx.processor.Reset()
-	return lx.processor, nil
-}
-
+// AddRule registers a new tokenizing rule with the lexer.
+// This method is not safe for concurrent use with Next(). All rules should be
+// added before tokenization begins.
 func (lx *TextLexer) AddRule(lexType LexemeType, lexRule Rule) error {
 	lx.rulesMu.Lock()
 	defer lx.rulesMu.Unlock()
@@ -72,7 +69,6 @@ func (lx *TextLexer) AddRule(lexType LexemeType, lexRule Rule) error {
 	if lexType == "" {
 		return fmt.Errorf("rule type cannot be empty")
 	}
-
 	if lexRule == nil {
 		return fmt.Errorf("rule cannot be nil")
 	}
@@ -80,21 +76,28 @@ func (lx *TextLexer) AddRule(lexType LexemeType, lexRule Rule) error {
 	lx.rulesMap[lexType] = lexRule
 	lx.rules = append(lx.rules, lexType)
 	lx.processor = nil // Invalidate processor so it's rebuilt with the new rule.
-
 	return nil
 }
 
+// MustAddRule is like AddRule but panics if the rule cannot be added.
 func (lx *TextLexer) MustAddRule(lexType LexemeType, lexRule Rule) {
 	if err := lx.AddRule(lexType, lexRule); err != nil {
 		panic(fmt.Sprintf("MustAddRule: %v", err))
 	}
 }
 
+// Next reads from the input and returns the next recognized Lexeme.
+//
+// It returns an io.EOF error only when the stream is fully consumed and no more
+// lexemes can be produced. Any other error indicates a problem with the
+// underlying reader or an unrecoverable state (e.g., a rule that requires more
+// input at EOF).
+//
+// This method is safe for concurrent use by multiple goroutines.
 func (lx *TextLexer) Next() (*Lexeme, error) {
 	lx.mu.Lock()
 	defer lx.mu.Unlock()
 
-	// The number of symbols consumed (n) is the single source of truth for all state updates.
 	typ, runes, n, err := lx.nextLexeme()
 	if err != nil {
 		return nil, err
@@ -102,10 +105,8 @@ func (lx *TextLexer) Next() (*Lexeme, error) {
 
 	lex := NewLexeme(typ, runes, lx.offset)
 
-	// Update our global offset by the number of symbols consumed.
 	lx.offset += n
 
-	// compact the buffer by removing consumed symbols.
 	lx.buf = lx.buf[n:]
 	lx.w = lx.w - n
 	lx.r = 0
@@ -113,28 +114,52 @@ func (lx *TextLexer) Next() (*Lexeme, error) {
 	return lex, nil
 }
 
-// createSymbol creates a Symbol with appropriate positional flags based on current lexer state.
+func (lx *TextLexer) getProcessor() (*rulesProcessor, error) {
+	lx.rulesMu.RLock()
+	if lx.processor != nil {
+		lx.rulesMu.RUnlock()
+		lx.processor.Reset()
+		return lx.processor, nil
+	}
+	lx.rulesMu.RUnlock()
+
+	lx.rulesMu.Lock()
+	defer lx.rulesMu.Unlock()
+
+	if lx.processor != nil {
+		lx.processor.Reset()
+		return lx.processor, nil
+	}
+
+	if len(lx.rules) == 0 {
+		return nil, fmt.Errorf("no rules defined")
+	}
+	lx.processor = newRulesProcessor(lx.rules, lx.rulesMap)
+	lx.processor.Reset()
+	return lx.processor, nil
+}
+
 func (lx *TextLexer) createSymbol(r rune, isEOF bool) Symbol {
 	flags := uint(FlagNone)
 
-	// Set BOF flag for the very first symbol
+	// Set BOF flag only for the very first symbol.
 	if lx.offset == 0 && lx.r == 0 && lx.w == 0 {
 		flags |= FlagBOF
 	}
 
-	// Set BOL flag if we're at the beginning of a line
+	// Set BOL flag if the previous symbol was a newline.
 	if lx.isNewLine {
 		flags |= FlagBOL
 		lx.isNewLine = false
 	}
 
-	// Set EOL flag if this is a newline character
+	// Set EOL flag if the current symbol is a newline.
 	if r == '\n' {
 		flags |= FlagEOL
 		lx.isNewLine = true
 	}
 
-	// Set EOF flag if this is the last symbol
+	// Set EOF flag if this is the end of the input stream.
 	if isEOF {
 		flags |= FlagEOF
 	}
@@ -155,16 +180,15 @@ func (lx *TextLexer) nextLexeme() (LexemeType, []rune, int, error) {
 		var isEOF bool
 
 		if lx.r < lx.w {
-			// Read from the existing buffer.
+			// Read from existing buffer.
 			sym = lx.buf[lx.r]
 		} else {
-			// Buffer is exhausted, read from the underlying io.Reader.
-			var readErr error
+			// Buffer is exhausted, read a new rune.
 			var r rune
-			r, _, readErr = lx.reader.ReadRune()
-			if readErr != nil {
-				if readErr != io.EOF {
-					return LexemeTypeUnknown, nil, 0, fmt.Errorf("ReadRune: %w", readErr)
+			r, _, err = lx.reader.ReadRune()
+			if err != nil {
+				if err != io.EOF {
+					return LexemeTypeUnknown, nil, 0, fmt.Errorf("ReadRune: %w", err)
 				}
 				isEOF = true
 				r = RuneEOF
@@ -177,25 +201,22 @@ func (lx *TextLexer) nextLexeme() (LexemeType, []rune, int, error) {
 			}
 		}
 
-		// Process the symbol we just got.
 		typ, textLen := processor.Process(sym)
 
-		// `textLen` < 0 signals that the processor needs more symbols to decide.
+		// textLen < 0 means the rule needs more input to decide.
 		if textLen < 0 {
 			lx.r++
 			if isEOF {
-				// Processor wants more input, but we are at EOF. This means no token
-				// can be formed from the remaining buffer.
+				// Processor wants more input but we hit EOF.
 				return LexemeTypeUnknown, nil, 0, fmt.Errorf("lexer: rule remained inconclusive at EOF")
 			}
-			// We may continue processing with more input.
 			continue
 		}
 
 		if textLen == 0 {
 			if startPos < lx.w {
 				typ = LexemeTypeUnknown
-				textLen = 1 // Force consumption of one symbol.
+				textLen = 1 // Force consumption of one unknown symbol.
 			} else if isEOF {
 				return LexemeTypeUnknown, nil, 0, io.EOF
 			} else {
@@ -204,21 +225,17 @@ func (lx *TextLexer) nextLexeme() (LexemeType, []rune, int, error) {
 		}
 
 		if isEOF && lx.r == startPos {
-			// We are at EOF and the processor did not consume any symbols.
 			return LexemeTypeUnknown, nil, 0, io.EOF
 		}
 
-		// Extract the runes from the symbols
 		symbols := lx.buf[startPos : startPos+textLen]
 		runes := make([]rune, len(symbols))
 		for i, s := range symbols {
 			runes[i] = s.Rune()
 		}
 
-		// The read pointer is now positioned at the end of the consumed token.
 		lx.r = startPos + textLen
 
-		// Update line and column tracking
 		for _, s := range symbols {
 			if s.Rune() == '\n' {
 				lx.lineNum++

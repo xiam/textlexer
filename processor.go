@@ -11,8 +11,8 @@ type ruleState struct {
 	isActive    bool
 }
 
-// rulesProcessor processes input symbols through multiple rules (scanners) and
-// returns the best match (the longest accepted lexeme).
+// rulesProcessor processes input symbols through multiple rules and returns the
+// best match based on the "maximal munch" principle (longest accepted lexeme).
 type rulesProcessor struct {
 	rules []LexemeType
 
@@ -22,7 +22,7 @@ type rulesProcessor struct {
 
 func newRulesProcessor(rules []LexemeType, initialStates map[LexemeType]Rule) *rulesProcessor {
 	if len(rules) != len(initialStates) {
-		panic("rules and rules length mismatch")
+		panic("rules and initialStates length mismatch")
 	}
 
 	states := map[LexemeType]*ruleState{}
@@ -55,22 +55,23 @@ func (rp *rulesProcessor) Reset() {
 }
 
 func (rp *rulesProcessor) Process(s Symbol) (LexemeType, int) {
-	// Process the symbol through all active scanners.
+	// Process the symbol through all active scanners
 	activeScanners := rp.processSymbol(s)
 
-	// If there are still active scanners, we need more input.
+	// If any scanners are still active, we need more input
 	if activeScanners > 0 {
 		return LexemeTypeUnknown, -1
 	}
 
-	// No active scanners left, find the best match.
+	// All scanners are done; pick the best match
 	bestMatch, bestMatchLen := rp.pickBestMatch()
 
-	// No rule matched, consume one symbol to advance the input.
+	// If no match was found, return UNKNOWN with length 1 to consume at least
 	if bestMatch == LexemeTypeUnknown {
 		return LexemeTypeUnknown, 1
 	}
 
+	// Remove the matched symbols from the buffer
 	return bestMatch, bestMatchLen
 }
 
@@ -93,7 +94,6 @@ func (rp *rulesProcessor) processSymbol(s Symbol) int {
 				pushedBackSymbol := rp.buf[len(rp.buf)-pushbackCount]
 				nextRule, nextState = nextRule(pushedBackSymbol)
 			} else {
-				// Can't push back anymore, reject the input.
 				nextRule, nextState = nil, StateReject
 			}
 		}
@@ -140,13 +140,4 @@ func (rp *rulesProcessor) pickBestMatch() (LexemeType, int) {
 	}
 
 	return bestMatch, bestMatchLen
-}
-
-// GetBuffer returns the symbols currently in the buffer as a string.
-func (rp *rulesProcessor) GetBuffer() string {
-	runes := make([]rune, len(rp.buf))
-	for i, sym := range rp.buf {
-		runes[i] = sym.Rune()
-	}
-	return string(runes)
 }

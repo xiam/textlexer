@@ -788,6 +788,67 @@ func TestLexerProcessor(t *testing.T) {
 				textlexer.NewLexemeFromString(textlexer.LexemeType("PUSHBACK_EOF"), "a", 0),
 			},
 		},
+		{
+			name:  "BOL and EOL Flags with Multiple Newlines",
+			input: "a\n\nb",
+			setupRules: func(lx *textlexer.TextLexer) {
+				// This test requires capturing the flags of each symbol as it is
+				// processed. The rule itself will perform the assertions.
+				var processedSymbols []textlexer.Symbol
+				var mu sync.Mutex
+
+				captureRule := func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+					if s.IsEOF() {
+						return nil, textlexer.StateReject
+					}
+					mu.Lock()
+					processedSymbols = append(processedSymbols, s)
+					mu.Unlock()
+					return nil, textlexer.StateAccept // Accept one symbol at a time.
+				}
+				lx.MustAddRule("CAPTURE", captureRule)
+
+				// This anonymous function will be called after the lexer runs
+				// to perform the final assertions on the captured symbols.
+				t.Cleanup(func() {
+					require.Len(t, processedSymbols, 4, "Should have processed 4 symbols")
+
+					// Symbol 'a' at offset 0
+					symA := processedSymbols[0]
+					assert.Equal(t, 'a', symA.Rune())
+					assert.True(t, symA.IsBOF(), "'a' should be at beginning of file")
+					assert.True(t, symA.IsBOL(), "'a' should be at beginning of line")
+					assert.False(t, symA.IsEOL(), "'a' should not be at end of line")
+
+					// First '\n' at offset 1
+					symNL1 := processedSymbols[1]
+					assert.Equal(t, '\n', symNL1.Rune())
+					assert.False(t, symNL1.IsBOF(), "first '\\n' is not BOF")
+					assert.False(t, symNL1.IsBOL(), "first '\\n' is not BOL")
+					assert.True(t, symNL1.IsEOL(), "first '\\n' should be EOL")
+
+					// Second '\n' at offset 2
+					symNL2 := processedSymbols[2]
+					assert.Equal(t, '\n', symNL2.Rune())
+					assert.False(t, symNL2.IsBOF(), "second '\\n' is not BOF")
+					assert.True(t, symNL2.IsBOL(), "second '\\n' should be BOL")
+					assert.True(t, symNL2.IsEOL(), "second '\\n' should be EOL")
+
+					// Symbol 'b' at offset 3
+					symB := processedSymbols[3]
+					assert.Equal(t, 'b', symB.Rune())
+					assert.False(t, symB.IsBOF(), "'b' is not BOF")
+					assert.True(t, symB.IsBOL(), "'b' should be BOL")
+					assert.False(t, symB.IsEOL(), "'b' should not be EOL")
+				})
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString("CAPTURE", "a", 0),
+				textlexer.NewLexemeFromString("CAPTURE", "\n", 1),
+				textlexer.NewLexemeFromString("CAPTURE", "\n", 2),
+				textlexer.NewLexemeFromString("CAPTURE", "b", 3),
+			},
+		},
 	}
 
 	for _, tc := range testCases {
@@ -2931,4 +2992,119 @@ func TestLexerRecoveryMechanisms(t *testing.T) {
 		assert.Nil(t, lex, "Lexeme should be nil on reader error")
 		assert.Contains(t, err.Error(), "temporary reader error", "Error message did not match")
 	})
+}
+
+func TestLexerBacktrackingAndBufferState(t *testing.T) {
+	const (
+		lexTypeFor = textlexer.LexemeType("FOR")
+		lexTypeID  = textlexer.LexemeType("ID")
+	)
+
+	// This rule matches "for" but only if it's not followed by another letter.
+	// If it is, it backtracks, effectively rejecting the match as a keyword.
+	forKeywordRule := func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.Rune() == 'f' {
+			return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+				if s.Rune() == 'o' {
+					return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+						if s.Rune() == 'r' {
+							return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+								// Lookahead: if the next char is a letter, this is not a keyword.
+								if isLetter(s) {
+									// Reject and push everything back.
+									return backtrack(4, textlexer.StateReject), textlexer.StatePushBack
+								}
+								// It's a keyword. Push back the non-letter symbol.
+								return backtrack(1, textlexer.StateAccept), textlexer.StatePushBack
+							}, textlexer.StateAccept
+						}
+						return nil, textlexer.StateReject
+					}, textlexer.StateContinue
+				}
+				return nil, textlexer.StateReject
+			}, textlexer.StateContinue
+		}
+		return nil, textlexer.StateReject
+	}
+
+	input := "for format"
+	lx := textlexer.New(strings.NewReader(input))
+	lx.MustAddRule(lexTypeFor, forKeywordRule)
+	lx.MustAddRule(lexTypeID, newIdentifierRule())
+	lx.MustAddRule("WS", newWhitespaceRule())
+
+	// 1. "for" followed by space. The rule should accept "for" and push back the space.
+	lex, err := lx.Next()
+	require.NoError(t, err)
+	assert.Equal(t, lexTypeFor, lex.Type())
+	assert.Equal(t, "for", lex.Text())
+	assert.Equal(t, 0, lex.Offset())
+
+	// 2. Whitespace. Should be correctly processed from the backtracked buffer.
+	lex, err = lx.Next()
+	require.NoError(t, err)
+	assert.Equal(t, " ", lex.Text())
+	assert.Equal(t, 3, lex.Offset())
+
+	// 3. "format". The keyword rule will see "form" then "a", causing it to
+	//    reject and push back all 4 symbols. The ID rule will then win with
+	//    the longest match, "format".
+	lex, err = lx.Next()
+	require.NoError(t, err)
+	assert.Equal(t, lexTypeID, lex.Type())
+	assert.Equal(t, "format", lex.Text())
+	assert.Equal(t, 4, lex.Offset())
+
+	// 4. End of file.
+	_, err = lx.Next()
+	assert.Equal(t, io.EOF, err)
+}
+
+func TestLexerProcessorRecreationWithNewRules(t *testing.T) {
+	const (
+		lexTypeA = textlexer.LexemeType("A")
+		lexTypeB = textlexer.LexemeType("B")
+	)
+
+	input := "a a a b b b"
+	lx := textlexer.New(strings.NewReader(input))
+	lx.MustAddRule(lexTypeA, matchString("a"))
+	lx.MustAddRule("WS", newWhitespaceRule())
+
+	// Process the first token to ensure the initial processor is created.
+	lex, err := lx.Next()
+	require.NoError(t, err)
+	assert.Equal(t, lexTypeA, lex.Type())
+
+	// Now, add a new rule. This should invalidate the internal processor.
+	err = lx.AddRule(lexTypeB, matchString("b"))
+	require.NoError(t, err)
+
+	// Continue lexing. The lexer should seamlessly create a new processor
+	// that includes the new rule for "b".
+	var foundTypes []textlexer.LexemeType
+	for {
+		lex, err := lx.Next()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		foundTypes = append(foundTypes, lex.Type())
+	}
+
+	// The first 'a' was consumed before the rule change.
+	// The rest should be processed with the new rule set.
+	expectedTypes := []textlexer.LexemeType{
+		"WS",
+		lexTypeA,
+		"WS",
+		lexTypeA,
+		"WS",
+		lexTypeB, // This verifies the new rule was active.
+		"WS",
+		lexTypeB,
+		"WS",
+		lexTypeB,
+	}
+	assert.Equal(t, expectedTypes, foundTypes)
 }
