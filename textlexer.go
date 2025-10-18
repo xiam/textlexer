@@ -13,46 +13,28 @@ import (
 	"sync"
 )
 
-const (
-	// RuneEOF represents the end-of-file marker as a rune.
-	RuneEOF = rune(-1)
-)
-
 // TextLexer orchestrates the tokenization of an input stream according to a
 // set of user-defined rules. It manages input buffering, state tracking (line
 // and column numbers), and the rule processing engine.
 type TextLexer struct {
-	reader io.RuneReader
-
-	offset  int
-	lineNum int
-	colNum  int
-
-	isNewLine bool
-
-	buf []Symbol
-	w   int
-	r   int
-
-	mu sync.Mutex
-
 	rules    []LexemeType
 	rulesMap map[LexemeType]Rule
-	rulesMu  sync.RWMutex
+	rulesMu  sync.Mutex
 
-	processor *rulesProcessor
+	symbolReader SymbolReader
+	processor    *RulesProcessor
+	mu           sync.Mutex
+
+	runesRead     uint64 // Total number of read runes.
+	runesAccepted uint64 // Total number of accepted runes.
 }
 
 // New creates a new TextLexer that reads from the provided io.RuneReader.
 func New(rr io.RuneReader) *TextLexer {
 	return &TextLexer{
-		buf:       make([]Symbol, 0, 4096),
-		reader:    rr,
-		rules:     []LexemeType{},
-		rulesMap:  map[LexemeType]Rule{},
-		lineNum:   1,
-		colNum:    0,
-		isNewLine: true,
+		symbolReader: NewSymbolReader(rr),
+		rules:        []LexemeType{},
+		rulesMap:     map[LexemeType]Rule{},
 	}
 }
 
@@ -62,6 +44,10 @@ func New(rr io.RuneReader) *TextLexer {
 func (lx *TextLexer) AddRule(lexType LexemeType, lexRule Rule) error {
 	lx.rulesMu.Lock()
 	defer lx.rulesMu.Unlock()
+
+	if lx.processor != nil {
+		return fmt.Errorf("cannot add rule %q after tokenization has started", lexType)
+	}
 
 	if _, ok := lx.rulesMap[lexType]; ok {
 		return fmt.Errorf("rule %q already exists", lexType)
@@ -75,7 +61,6 @@ func (lx *TextLexer) AddRule(lexType LexemeType, lexRule Rule) error {
 
 	lx.rulesMap[lexType] = lexRule
 	lx.rules = append(lx.rules, lexType)
-	lx.processor = nil // Invalidate processor so it's rebuilt with the new rule.
 	return nil
 }
 
@@ -88,166 +73,87 @@ func (lx *TextLexer) MustAddRule(lexType LexemeType, lexRule Rule) {
 
 // Next reads from the input and returns the next recognized Lexeme.
 //
-// It returns an io.EOF error only when the stream is fully consumed and no more
-// lexemes can be produced. Any other error indicates a problem with the
-// underlying reader or an unrecoverable state (e.g., a rule that requires more
-// input at EOF).
-//
 // This method is safe for concurrent use by multiple goroutines.
 func (lx *TextLexer) Next() (*Lexeme, error) {
 	lx.mu.Lock()
 	defer lx.mu.Unlock()
 
-	typ, runes, n, err := lx.nextLexeme()
-	if err != nil {
+	if err := lx.initProcessor(); err != nil {
 		return nil, err
 	}
 
-	lex := NewLexeme(typ, runes, lx.offset)
+	for {
 
-	lx.offset += n
+		if lx.runesAccepted <= lx.runesRead {
+			if err := lx.feedProcessor(); err != nil {
+				if lx.runesRead == lx.runesAccepted {
+					return nil, err
+				}
+			}
+		}
 
-	lx.buf = lx.buf[n:]
-	lx.w = lx.w - n
-	lx.r = 0
+		typ, runes, accepted, err := lx.nextLexeme()
+		if typ == LexemeTypeUnspecified {
+			// Need more input
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
 
-	return lex, nil
-}
-
-func (lx *TextLexer) getProcessor() (*rulesProcessor, error) {
-	// Fast path: Check for existing processor with a read lock.
-	lx.rulesMu.RLock()
-	p := lx.processor
-	lx.rulesMu.RUnlock()
-
-	if p != nil {
-		p.Reset()
-		return p, nil
+		lex := NewLexeme(typ, runes, lx.runesAccepted)
+		lx.runesAccepted += accepted
+		return lex, nil
 	}
 
-	// Slow path: Acquire a write lock to create the processor.
+	return nil, io.EOF
+}
+
+func (lx *TextLexer) feedProcessor() error {
+	// Read next symbol
+	sym, err := lx.symbolReader.ReadSymbol()
+
+	if err != nil {
+		return err
+	}
+
+	// Feed the symbol to the processor.
+	lx.runesRead++
+	lx.processor.Feed(sym)
+
+	return nil
+}
+
+func (lx *TextLexer) nextLexeme() (LexemeType, []rune, uint64, error) {
+	typ, match, matchLen := lx.processor.Process()
+	if typ == LexemeTypeUnspecified {
+		// Needs more input to decide.
+		return typ, nil, 0, nil
+	}
+
+	// Convert matched symbols to runes.
+	runes := make([]rune, len(match))
+	for i := uint64(0); i < matchLen; i++ {
+		runes[i] = match[i].Rune()
+	}
+
+	return typ, runes, matchLen, nil
+}
+
+func (lx *TextLexer) initProcessor() error {
 	lx.rulesMu.Lock()
 	defer lx.rulesMu.Unlock()
 
-	// Double-check in case another goroutine created it while we were waiting for the lock.
 	if lx.processor != nil {
-		lx.processor.Reset()
-		return lx.processor, nil
+		// Already initialized
+		return nil
 	}
 
 	if len(lx.rules) == 0 {
-		return nil, fmt.Errorf("no rules defined")
-	}
-	lx.processor = newRulesProcessor(lx.rules, lx.rulesMap)
-	return lx.processor, nil
-}
-
-func (lx *TextLexer) createSymbol(r rune, isEOF bool) Symbol {
-	flags := uint(FlagNone)
-
-	// Set BOF flag only for the very first symbol.
-	if lx.offset == 0 && lx.r == 0 && lx.w == 0 {
-		flags |= FlagBOF
+		return fmt.Errorf("no rules defined")
 	}
 
-	// Set BOL flag if the previous symbol was a newline.
-	if lx.isNewLine {
-		flags |= FlagBOL
-		lx.isNewLine = false
-	}
+	lx.processor = NewRulesProcessor(lx.rules, lx.rulesMap)
 
-	// Set EOL flag if the current symbol is a newline.
-	if r == '\n' {
-		flags |= FlagEOL
-		lx.isNewLine = true
-	}
-
-	// Set EOF flag if this is the end of the input stream.
-	if isEOF {
-		flags |= FlagEOF
-	}
-
-	return NewSymbol(r, flags)
-}
-
-func (lx *TextLexer) nextLexeme() (LexemeType, []rune, int, error) {
-	processor, err := lx.getProcessor()
-	if err != nil {
-		return LexemeTypeUnknown, nil, 0, fmt.Errorf("processor: %w", err)
-	}
-
-	startPos := lx.r
-
-	for {
-		var sym Symbol
-		var isEOF bool
-
-		if lx.r < lx.w {
-			// Read from existing buffer.
-			sym = lx.buf[lx.r]
-		} else {
-			// Buffer is exhausted, read a new rune.
-			var r rune
-			r, _, err = lx.reader.ReadRune()
-			if err != nil {
-				if err != io.EOF {
-					return LexemeTypeUnknown, nil, 0, fmt.Errorf("ReadRune: %w", err)
-				}
-				isEOF = true
-				r = RuneEOF
-			}
-
-			sym = lx.createSymbol(r, isEOF)
-			if !isEOF {
-				lx.buf = append(lx.buf, sym)
-				lx.w++
-			}
-		}
-
-		typ, textLen := processor.Process(sym)
-
-		// textLen < 0 means the rule needs more input to decide.
-		if textLen < 0 {
-			lx.r++
-			if isEOF {
-				// Processor wants more input but we hit EOF.
-				return LexemeTypeUnknown, nil, 0, fmt.Errorf("lexer: rule remained inconclusive at EOF")
-			}
-			continue
-		}
-
-		if textLen == 0 {
-			if startPos < lx.w {
-				typ = LexemeTypeUnknown
-				textLen = 1 // Force consumption of one unknown symbol.
-			} else if isEOF {
-				return LexemeTypeUnknown, nil, 0, io.EOF
-			} else {
-				return LexemeTypeUnknown, nil, 0, fmt.Errorf("lexer: rule returned zero-length token")
-			}
-		}
-
-		if isEOF && lx.r == startPos {
-			return LexemeTypeUnknown, nil, 0, io.EOF
-		}
-
-		symbols := lx.buf[startPos : startPos+textLen]
-		runes := make([]rune, len(symbols))
-		for i, s := range symbols {
-			runes[i] = s.Rune()
-		}
-
-		lx.r = startPos + textLen
-
-		for _, s := range symbols {
-			if s.Rune() == '\n' {
-				lx.lineNum++
-				lx.colNum = 0
-			} else {
-				lx.colNum++
-			}
-		}
-
-		return typ, runes, textLen, nil
-	}
+	return nil
 }

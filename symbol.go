@@ -1,5 +1,9 @@
 package textlexer
 
+import (
+	"fmt"
+)
+
 const (
 	FlagNone uint = 0         // FlagNone indicates no special positional flags.
 	FlagEOF  uint = 1 << iota // FlagEOF indicates the symbol is the last in the input stream.
@@ -52,5 +56,7 @@ func (s Symbol) Rune() rune {
 
 // String returns a string representation of the Symbol's rune.
 func (s Symbol) String() string {
-	return string(s.r)
+	z := fmt.Sprintf("%q [isEOF=%t, isBOF=%t, isEOL=%t, isBOL=%t]", string(s.r), s.IsEOF(), s.IsBOF(), s.IsEOL(), s.IsBOL())
+	return z
+	//return string(s.r)
 }

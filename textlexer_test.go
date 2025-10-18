@@ -72,12 +72,16 @@ import (
 
 // backtrack is a test stub that simulates a real backtrack function for state signaling.
 func backtrack(n int, s textlexer.State) textlexer.Rule {
-	return func(sym textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+	return func(_ textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 		if n > 0 {
 			return backtrack(n-1, s), textlexer.StatePushBack
 		}
 		return nil, s
 	}
+}
+
+func pushBackAndAccept(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+	return backtrack(1, textlexer.StateAccept)(s)
 }
 
 // matchString is a test helper that creates a simple Rule to match an exact string.
@@ -190,50 +194,67 @@ func isLetter(s textlexer.Symbol) bool {
 
 func newWhitespaceRule() textlexer.Rule {
 	var loop textlexer.Rule
+
 	loop = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 		if isWhitespace(s) {
 			return loop, textlexer.StateAccept
 		}
+
 		return nil, textlexer.StateReject
 	}
+
 	return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 		if isWhitespace(s) {
 			return loop, textlexer.StateAccept
 		}
+
 		return nil, textlexer.StateReject
 	}
 }
 
 func newUnsignedIntegerRule() textlexer.Rule {
 	var loop textlexer.Rule
+
 	loop = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 		if isDigit(s) {
 			return loop, textlexer.StateAccept
 		}
+
 		return nil, textlexer.StateReject
 	}
+
 	return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 		if isDigit(s) {
 			return loop, textlexer.StateAccept
 		}
+
 		return nil, textlexer.StateReject
 	}
 }
 
 func newIdentifierRule() textlexer.Rule {
 	var loop textlexer.Rule
+
 	loop = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 		r := s.Rune()
+
 		if isLetter(s) || isDigit(s) || r == '_' {
-			return loop, textlexer.StateAccept
+			if !s.IsEOF() {
+				return loop, textlexer.StateAccept
+			}
+			return nil, textlexer.StateAccept
 		}
+
 		return nil, textlexer.StateReject
 	}
+
 	return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 		r := s.Rune()
+
 		if isLetter(s) || r == '_' {
 			return loop, textlexer.StateAccept
 		}
+
 		return nil, textlexer.StateReject
 	}
 }
@@ -241,24 +262,13 @@ func newIdentifierRule() textlexer.Rule {
 func newUnsignedFloatRule() textlexer.Rule {
 	var start, integerPart, afterInitialRadix, afterIntegerRadix, fractionalPart textlexer.Rule
 
-	pushBackAndAccept := func(_ textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		return backtrack(1, textlexer.StateAccept), textlexer.StatePushBack
-	}
-
 	// State for matching digits after a decimal point.
 	fractionalPart = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 		if isDigit(s) {
 			return fractionalPart, textlexer.StateAccept
 		}
-		return pushBackAndAccept(s)
-	}
 
-	// State after a radix point that followed an integer part (e.g., after "123.").
-	afterIntegerRadix = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		if isDigit(s) {
-			return fractionalPart, textlexer.StateAccept
-		}
-		return pushBackAndAccept(s)
+		return nil, textlexer.StateReject
 	}
 
 	// State after a radix point was the *first* character. A fractional part is required.
@@ -266,6 +276,16 @@ func newUnsignedFloatRule() textlexer.Rule {
 		if isDigit(s) {
 			return fractionalPart, textlexer.StateAccept
 		}
+
+		return nil, textlexer.StateReject
+	}
+
+	// State after a radix point following an integer part. A fractional part is optional.
+	afterIntegerRadix = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if isDigit(s) {
+			return fractionalPart, textlexer.StateAccept
+		}
+
 		return nil, textlexer.StateReject
 	}
 
@@ -274,9 +294,11 @@ func newUnsignedFloatRule() textlexer.Rule {
 		if isDigit(s) {
 			return integerPart, textlexer.StateContinue
 		}
+
 		if s.Rune() == '.' {
 			return afterIntegerRadix, textlexer.StateAccept
 		}
+
 		return nil, textlexer.StateReject
 	}
 
@@ -284,9 +306,11 @@ func newUnsignedFloatRule() textlexer.Rule {
 		if isDigit(s) {
 			return integerPart, textlexer.StateContinue
 		}
+
 		if s.Rune() == '.' {
 			return afterInitialRadix, textlexer.StateContinue
 		}
+
 		return nil, textlexer.StateReject
 	}
 
@@ -294,24 +318,34 @@ func newUnsignedFloatRule() textlexer.Rule {
 }
 
 func newSignedIntegerRule() textlexer.Rule {
-	var start, loop textlexer.Rule
-	loop = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		if isDigit(s) {
-			return loop, textlexer.StateAccept
-		}
-		return nil, textlexer.StateReject
-	}
+	var start textlexer.Rule
+
 	start = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 		r := s.Rune()
 		if r == '+' || r == '-' {
 			// A sign must be followed by at least one digit.
-			return loop, textlexer.StateContinue
+			return unsignedIntegerRule, textlexer.StateContinue
 		}
-		if isDigit(s) {
-			return loop, textlexer.StateAccept
-		}
-		return nil, textlexer.StateReject
+
+		return unsignedIntegerRule(s)
 	}
+
+	return start
+}
+
+func newSignedFloatRule() textlexer.Rule {
+	var start textlexer.Rule
+
+	start = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		r := s.Rune()
+
+		if r == '+' || r == '-' {
+			return unsignedFloatRule, textlexer.StateContinue
+		}
+
+		return unsignedFloatRule(s)
+	}
+
 	return start
 }
 
@@ -326,39 +360,43 @@ func newSymbolRule() textlexer.Rule {
 }
 
 func newSingleQuotedStringRule() textlexer.Rule {
-	var loop, afterQuote textlexer.Rule
+	var loop textlexer.Rule
+
 	loop = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 		if s.Rune() == '\'' {
-			return afterQuote, textlexer.StateAccept
+			return nil, textlexer.StateAccept
 		}
+
 		// Note: This simple version doesn't handle escaped quotes.
 		return loop, textlexer.StateContinue
 	}
-	afterQuote = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		return nil, textlexer.StateReject
-	}
+
 	return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 		if s.Rune() == '\'' {
 			return loop, textlexer.StateContinue
 		}
+
 		return nil, textlexer.StateReject
 	}
 }
 
 func newSlashStarCommentRule() textlexer.Rule {
-	var inComment, afterStar textlexer.Rule
+	var inComment textlexer.Rule
+
 	inComment = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 		if s.Rune() == '*' {
-			return afterStar, textlexer.StateContinue
+			return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+				if s.Rune() == '/' {
+					return nil, textlexer.StateAccept
+				}
+
+				return inComment, textlexer.StateContinue
+			}, textlexer.StateContinue
 		}
+
 		return inComment, textlexer.StateContinue
 	}
-	afterStar = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		if s.Rune() == '/' {
-			return nil, textlexer.StateAccept
-		}
-		return inComment, textlexer.StateContinue
-	}
+
 	return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 		if s.Rune() == '/' {
 			return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
@@ -390,7 +428,9 @@ func (rr *recoverableReader) ReadRune() (rune, int, error) {
 var (
 	whitespaceRule      = newWhitespaceRule()
 	unsignedIntegerRule = newUnsignedIntegerRule()
+	signedIntegerRule   = newSignedIntegerRule()
 	unsignedFloatRule   = newUnsignedFloatRule()
+	signedFloatRule     = newSignedFloatRule()
 	identifierRule      = newIdentifierRule()
 )
 
@@ -413,6 +453,123 @@ func TestLexerProcessor(t *testing.T) {
 		expectedLexemes []*textlexer.Lexeme
 		expectedError   string
 	}{
+		{
+			name:  "Basic Integer",
+			input: "123 45",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule(lexTypeInteger, unsignedIntegerRule)
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString(lexTypeInteger, "123", 0),
+				textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, " ", 3),
+				textlexer.NewLexemeFromString(lexTypeInteger, "45", 4),
+			},
+		},
+		{
+			name:  "Basic Whitespace and Integers",
+			input: "  12  34\t\t56\n\n78  ",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule(lexTypeWhitespace, whitespaceRule)
+				lx.MustAddRule(lexTypeInteger, unsignedIntegerRule)
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString(lexTypeWhitespace, "  ", 0),
+				textlexer.NewLexemeFromString(lexTypeInteger, "12", 2),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, "  ", 4),
+				textlexer.NewLexemeFromString(lexTypeInteger, "34", 6),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, "\t\t", 8),
+				textlexer.NewLexemeFromString(lexTypeInteger, "56", 10),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, "\n\n", 12),
+				textlexer.NewLexemeFromString(lexTypeInteger, "78", 14),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, "  ", 16),
+			},
+		},
+		{
+			name:  "Basic Identifiers, Whitespace, and Numbers",
+			input: "var1 var_2 123 _var3",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule(lexTypeWhitespace, whitespaceRule)
+				lx.MustAddRule(lexTypeIdentifier, identifierRule)
+				lx.MustAddRule(lexTypeInteger, unsignedIntegerRule)
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString(lexTypeIdentifier, "var1", 0),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, " ", 4),
+				textlexer.NewLexemeFromString(lexTypeIdentifier, "var_2", 5),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, " ", 10),
+				textlexer.NewLexemeFromString(lexTypeInteger, "123", 11),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, " ", 14),
+				textlexer.NewLexemeFromString(lexTypeIdentifier, "_var3", 15),
+			},
+		},
+		{
+			name:  "Basic Unsigned Floats",
+			input: "0.123 45.67 .89 0. 123. . .4 5. ",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule(lexTypeFloat, unsignedFloatRule)
+				lx.MustAddRule(lexTypeWhitespace, whitespaceRule)
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString(lexTypeFloat, "0.123", 0),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, " ", 5),
+				textlexer.NewLexemeFromString(lexTypeFloat, "45.67", 6),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, " ", 11),
+				textlexer.NewLexemeFromString(lexTypeFloat, ".89", 12),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, " ", 15),
+				textlexer.NewLexemeFromString(lexTypeFloat, "0.", 16),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, " ", 18),
+				textlexer.NewLexemeFromString(lexTypeFloat, "123.", 19),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, " ", 23),
+				textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, ".", 24),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, " ", 25),
+				textlexer.NewLexemeFromString(lexTypeFloat, ".4", 26),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, " ", 28),
+				textlexer.NewLexemeFromString(lexTypeFloat, "5.", 29),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, " ", 31),
+			},
+		},
+		{
+			name:  "Basic Signed Integers",
+			input: "+123 -45 67 +0 -0",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule(lexTypeInteger, signedIntegerRule)
+				lx.MustAddRule(lexTypeWhitespace, whitespaceRule)
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString(lexTypeInteger, "+123", 0),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, " ", 4),
+				textlexer.NewLexemeFromString(lexTypeInteger, "-45", 5),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, " ", 8),
+				textlexer.NewLexemeFromString(lexTypeInteger, "67", 9),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, " ", 11),
+				textlexer.NewLexemeFromString(lexTypeInteger, "+0", 12),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, " ", 14),
+				textlexer.NewLexemeFromString(lexTypeInteger, "-0", 15),
+			},
+		},
+		{
+			name:  "Basic Signed Floats",
+			input: "+0.123 -45.67 .89 +0. -0. .4 -5.",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule(lexTypeFloat, signedFloatRule)
+				lx.MustAddRule(lexTypeWhitespace, whitespaceRule)
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString(lexTypeFloat, "+0.123", 0),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, " ", 6),
+				textlexer.NewLexemeFromString(lexTypeFloat, "-45.67", 7),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, " ", 13),
+				textlexer.NewLexemeFromString(lexTypeFloat, ".89", 14),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, " ", 17),
+				textlexer.NewLexemeFromString(lexTypeFloat, "+0.", 18),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, " ", 21),
+				textlexer.NewLexemeFromString(lexTypeFloat, "-0.", 22),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, " ", 25),
+				textlexer.NewLexemeFromString(lexTypeFloat, ".4", 26),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, " ", 28),
+				textlexer.NewLexemeFromString(lexTypeFloat, "-5.", 29),
+			},
+		},
 		{
 			name:  "Numeric and Whitespace",
 			input: "  12.3  \t   4 5.6 \t 7\n 8 9.0",
@@ -441,27 +598,22 @@ func TestLexerProcessor(t *testing.T) {
 			input: "  # not a comment\n# a comment",
 			setupRules: func(lx *textlexer.TextLexer) {
 				commentRule := func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-					// This comment rule only matches '#' if it's at the beginning of a line.
-					if !s.IsBOL() || s.Rune() != '#' {
-						return nil, textlexer.StateReject
-					}
-
-					// This rule is returned after we see a terminator. It ignores its input
-					// and just signals acceptance. This prevents a recursive pushback.
-					acceptorRule := func(_ textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-						return nil, textlexer.StateAccept
-					}
-
 					var loop textlexer.Rule
+
 					loop = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-						// Consume until EOL or EOF, then pushback to not include the terminator.
 						if s.IsEOL() || s.IsEOF() {
-							return acceptorRule, textlexer.StatePushBack
+							return nil, textlexer.StateAccept
 						}
+
 						return loop, textlexer.StateContinue
 					}
-					// Accept the '#' itself.
-					return loop, textlexer.StateAccept
+
+					// This comment rule only matches '#' if it's at the beginning of a line.
+					if s.Rune() == '#' && s.IsBOL() {
+						return loop, textlexer.StateContinue
+					}
+
+					return nil, textlexer.StateReject
 				}
 				lx.MustAddRule(lexTypeComment, commentRule)
 				lx.MustAddRule(lexTypeWhitespace, whitespaceRule)
@@ -601,7 +753,7 @@ func TestLexerProcessor(t *testing.T) {
 			input: "-12+-3++4-5",
 			setupRules: func(lx *textlexer.TextLexer) {
 				// Rule order matters: SignedInteger must come before a general Symbol rule.
-				lx.MustAddRule(textlexer.LexemeType("SIGNED_INT"), newSignedIntegerRule())
+				lx.MustAddRule(textlexer.LexemeType("SIGNED_INT"), signedIntegerRule)
 				lx.MustAddRule(textlexer.LexemeType("SYMBOL"), newSymbolRule())
 			},
 			expectedLexemes: []*textlexer.Lexeme{
@@ -655,16 +807,22 @@ func TestLexerProcessor(t *testing.T) {
 		},
 		{
 			name:  "Malformed Rule (Infinite Loop)",
-			input: "aaaa",
+			input: "abcd",
 			setupRules: func(lx *textlexer.TextLexer) {
 				// This rule always continues without consuming input, which can cause an infinite loop.
 				var brokenRule textlexer.Rule
 				brokenRule = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 					return brokenRule, textlexer.StateContinue
 				}
+
 				lx.MustAddRule(lexTypeLoop, brokenRule)
 			},
-			expectedError: "EOF",
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "a", 0),
+				textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "b", 1),
+				textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "c", 2),
+				textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "d", 3),
+			},
 		},
 		{
 			name:  "Excessive Pushback (Index Out of Bounds)",
@@ -691,7 +849,7 @@ func TestLexerProcessor(t *testing.T) {
 			expectedLexemes: func() []*textlexer.Lexeme {
 				lexemes := make([]*textlexer.Lexeme, 5000)
 				for i := 0; i < 5000; i++ {
-					lexemes[i] = textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "€", i)
+					lexemes[i] = textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "€", uint64(i))
 				}
 				return lexemes
 			}(),
@@ -798,14 +956,12 @@ func TestLexerProcessor(t *testing.T) {
 				var mu sync.Mutex
 
 				captureRule := func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-					if s.IsEOF() {
-						return nil, textlexer.StateReject
-					}
 					mu.Lock()
 					processedSymbols = append(processedSymbols, s)
 					mu.Unlock()
 					return nil, textlexer.StateAccept // Accept one symbol at a time.
 				}
+
 				lx.MustAddRule("CAPTURE", captureRule)
 
 				// This anonymous function will be called after the lexer runs
@@ -839,7 +995,7 @@ func TestLexerProcessor(t *testing.T) {
 					assert.Equal(t, 'b', symB.Rune())
 					assert.False(t, symB.IsBOF(), "'b' is not BOF")
 					assert.True(t, symB.IsBOL(), "'b' should be BOL")
-					assert.False(t, symB.IsEOL(), "'b' should not be EOL")
+					assert.True(t, symB.IsEOL(), "'b' should be EOL")
 				})
 			},
 			expectedLexemes: []*textlexer.Lexeme{
@@ -879,7 +1035,7 @@ func TestLexerProcessor(t *testing.T) {
 			ok := assert.Equal(t, tc.expectedLexemes, foundLexemes, "The stream of lexemes did not match the expected output.")
 			if !ok {
 				for i, lex := range foundLexemes {
-					t.Logf("\tFound[%d]\tText=%q, Type=%q, Offset=%d", i, lex.Text(), lex.Type(), lex.Offset())
+					t.Logf("\tFound[%d]\tText=%q, Type=%q, Offset=%d, Length=%d", i, lex.Text(), lex.Type(), lex.Offset(), lex.Len())
 				}
 			}
 
@@ -912,7 +1068,7 @@ func TestLexerTokenLargerThanInitialBuffer(t *testing.T) {
 	assert.Equal(t, lexTypeInteger, lex.Type())
 	assert.Equal(t, largeToken, lex.Text())
 	assert.Equal(t, largeTokenSize, lex.Len())
-	assert.Equal(t, 0, lex.Offset())
+	assert.Equal(t, uint64(0), lex.Offset())
 
 	lex, err = lx.Next()
 	require.NoError(t, err)
@@ -1110,12 +1266,6 @@ func TestLexerHandlesReaderError(t *testing.T) {
 	lx.MustAddRule("WS", whitespaceRule)
 
 	_, err := lx.Next()
-	require.NoError(t, err)
-
-	_, err = lx.Next()
-	require.NoError(t, err)
-
-	_, err = lx.Next()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "simulated underlying reader error")
 }
@@ -1250,77 +1400,6 @@ func TestLexerBufferCompaction(t *testing.T) {
 	assert.Equal(t, expectedTokenCount, totalTokensProcessed)
 }
 
-// TestLexerConcurrentAddRuleAndNext checks for race conditions when AddRule
-// is called while another goroutine is calling Next. Run with -race.
-func TestLexerConcurrentAddRuleAndNext(t *testing.T) {
-	const (
-		lexTypeA = textlexer.LexemeType("A")
-		lexTypeB = textlexer.LexemeType("B")
-		lexTypeC = textlexer.LexemeType("C")
-	)
-
-	input := strings.Repeat("abc", 1000)
-	lx := textlexer.New(strings.NewReader(input))
-	lx.MustAddRule(lexTypeA, matchString("a"))
-
-	lexingStarted := make(chan struct{})
-	addRuleDone := make(chan struct{})
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	var raceError error
-	var mu sync.Mutex
-
-	go func() {
-		defer wg.Done()
-		close(lexingStarted)
-		for {
-			_, err := lx.Next()
-			if err == io.EOF {
-				return
-			}
-			if err != nil {
-				mu.Lock()
-				if raceError == nil {
-					raceError = err
-				}
-				mu.Unlock()
-				return
-			}
-		}
-	}()
-
-	go func() {
-		defer wg.Done()
-		defer close(addRuleDone)
-		<-lexingStarted
-
-		// Add multiple rules with a small delay to increase chance of race detection.
-		time.Sleep(time.Millisecond)
-
-		err := lx.AddRule(lexTypeB, matchString("b"))
-		if err != nil {
-			mu.Lock()
-			if raceError == nil {
-				raceError = err
-			}
-			mu.Unlock()
-		}
-
-		err = lx.AddRule(lexTypeC, matchString("c"))
-		if err != nil {
-			mu.Lock()
-			if raceError == nil {
-				raceError = err
-			}
-			mu.Unlock()
-		}
-	}()
-
-	wg.Wait()
-	assert.NoError(t, raceError, "Encountered error during concurrent operations")
-}
-
 // TestLexerPathologicalRuleWithDeepBacktracking tests a complex rule that accepts
 // early, continues, and then forces a deep backtrack.
 func TestLexerPathologicalRuleWithDeepBacktracking(t *testing.T) {
@@ -1399,34 +1478,6 @@ func TestLexerPathologicalRuleWithDeepBacktracking(t *testing.T) {
 			assert.Equal(t, tc.expected, found, "Backtrack depth %d failed", tc.backtrackDepth)
 		})
 	}
-}
-
-// TestLexerWithInputContainingRuneEOF verifies the lexer does not prematurely
-// terminate when the input stream itself contains the special RuneEOF value.
-func TestLexerWithInputContainingRuneEOF(t *testing.T) {
-	const lexTypeID = textlexer.LexemeType("ID")
-	inputWithEOF := "hello" + string(textlexer.RuneEOF) + "world"
-
-	lx := textlexer.New(strings.NewReader(inputWithEOF))
-	lx.MustAddRule(lexTypeID, identifierRule)
-
-	expected := []*textlexer.Lexeme{
-		textlexer.NewLexemeFromString(lexTypeID, "hello", 0),
-		textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, string(textlexer.RuneEOF), 5),
-		textlexer.NewLexemeFromString(lexTypeID, "world", 6),
-	}
-
-	var found []*textlexer.Lexeme
-	for {
-		lex, err := lx.Next()
-		if err == io.EOF {
-			break
-		}
-		require.NoError(t, err)
-		found = append(found, lex)
-	}
-
-	assert.Equal(t, expected, found)
 }
 
 // TestLexerWithManyRules is a stress test for a large number of rules.
@@ -3038,13 +3089,13 @@ func TestLexerBacktrackingAndBufferState(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, lexTypeFor, lex.Type())
 	assert.Equal(t, "for", lex.Text())
-	assert.Equal(t, 0, lex.Offset())
+	assert.Equal(t, uint64(0), lex.Offset())
 
 	// 2. Whitespace. Should be correctly processed from the backtracked buffer.
 	lex, err = lx.Next()
 	require.NoError(t, err)
 	assert.Equal(t, " ", lex.Text())
-	assert.Equal(t, 3, lex.Offset())
+	assert.Equal(t, uint64(3), lex.Offset())
 
 	// 3. "format". The keyword rule will see "form" then "a", causing it to
 	//    reject and push back all 4 symbols. The ID rule will then win with
@@ -3053,7 +3104,7 @@ func TestLexerBacktrackingAndBufferState(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, lexTypeID, lex.Type())
 	assert.Equal(t, "format", lex.Text())
-	assert.Equal(t, 4, lex.Offset())
+	assert.Equal(t, uint64(4), lex.Offset())
 
 	// 4. End of file.
 	_, err = lx.Next()
@@ -3076,35 +3127,7 @@ func TestLexerProcessorRecreationWithNewRules(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, lexTypeA, lex.Type())
 
-	// Now, add a new rule. This should invalidate the internal processor.
+	// Now, add a new rule. This should be rejected because the processor is already created.
 	err = lx.AddRule(lexTypeB, matchString("b"))
-	require.NoError(t, err)
-
-	// Continue lexing. The lexer should seamlessly create a new processor
-	// that includes the new rule for "b".
-	var foundTypes []textlexer.LexemeType
-	for {
-		lex, err := lx.Next()
-		if err == io.EOF {
-			break
-		}
-		require.NoError(t, err)
-		foundTypes = append(foundTypes, lex.Type())
-	}
-
-	// The first 'a' was consumed before the rule change.
-	// The rest should be processed with the new rule set.
-	expectedTypes := []textlexer.LexemeType{
-		"WS",
-		lexTypeA,
-		"WS",
-		lexTypeA,
-		"WS",
-		lexTypeB, // This verifies the new rule was active.
-		"WS",
-		lexTypeB,
-		"WS",
-		lexTypeB,
-	}
-	assert.Equal(t, expectedTypes, foundTypes)
+	require.Error(t, err, "Should not allow adding rules after processor creation")
 }

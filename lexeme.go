@@ -4,10 +4,22 @@ package textlexer
 type LexemeType string
 
 const (
+	// LexemeTypeUnspecified is a special type that indicates the lexeme type has
+	// not been set.
+	LexemeTypeUnspecified LexemeType = ""
+
 	// LexemeTypeUnknown is the default type for a lexeme that does not match
 	// any defined rule.
 	LexemeTypeUnknown LexemeType = "UNKNOWN"
 )
+
+func (lt LexemeType) String() string {
+	if lt == LexemeTypeUnspecified {
+		return "UNSPECIFIED"
+	}
+
+	return string(lt)
+}
 
 // Lexeme represents a token identified by the lexer. It contains the token's
 // type, its textual content, and its starting position in the input source.
@@ -15,11 +27,11 @@ type Lexeme struct {
 	typ LexemeType
 
 	text   []rune
-	offset int
+	offset uint64
 }
 
 // NewLexeme creates and returns a new Lexeme.
-func NewLexeme(typ LexemeType, text []rune, offset int) *Lexeme {
+func NewLexeme(typ LexemeType, text []rune, offset uint64) *Lexeme {
 	return &Lexeme{
 		typ:    typ,
 		text:   text,
@@ -28,7 +40,7 @@ func NewLexeme(typ LexemeType, text []rune, offset int) *Lexeme {
 }
 
 // NewLexemeFromString creates and returns a new Lexeme from a string.
-func NewLexemeFromString(typ LexemeType, text string, offset int) *Lexeme {
+func NewLexemeFromString(typ LexemeType, text string, offset uint64) *Lexeme {
 	return &Lexeme{
 		typ:    typ,
 		text:   []rune(text),
@@ -48,7 +60,7 @@ func (l *Lexeme) Text() string {
 
 // Offset returns the zero-based starting position of the lexeme in the
 // original input source.
-func (l *Lexeme) Offset() int {
+func (l *Lexeme) Offset() uint64 {
 	return l.offset
 }
 

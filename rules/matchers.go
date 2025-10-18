@@ -4,6 +4,7 @@ import (
 	"unicode"
 
 	"github.com/xiam/textlexer"
+	"github.com/xiam/textlexer/processor"
 )
 
 // isCommonWhitespace returns true if r is a common whitespace
@@ -59,82 +60,102 @@ func isBinaryDigit(r rune) bool {
 	return r == '0' || r == '1'
 }
 
-/*
-func IsCommonWhitespace(r rune) bool {
-	return isCommonWhitespace(r)
+// isIdentifierStart returns true if a rune is a valid starting character for an identifier.
+func isIdentifierStart(r rune) bool {
+	return isASCIILetter(r) || r == '_'
 }
 
-func IsWhitespace(r rune) bool {
-	return isCommonWhitespace(r) || unicode.IsSpace(r)
+// isIdentifierPart returns true if a rune is a valid non-starting character for an identifier.
+func isIdentifierPart(r rune) bool {
+	return isIdentifierStart(r) || isASCIIDigit(r)
 }
-*/
 
-// newCharacterClassMatcher creates a rule that matches a sequence of characters
-// belonging to a specified character class, with defined minimum and maximum lengths.
+// newCharacterClassMatcher creates a rule that matches a sequence of
+// characters belonging to a specified character class, with defined minimum
+// and maximum lengths.
 func newCharacterClassMatcher(
 	characterClass func(rune) bool,
-	min int,
-	max int,
-	// NOTE: The nextRule parameter is no longer needed, as the terminal
-	//       state is now handled internally with a pushback.
+	minLen int,
+	maxLen int,
 ) textlexer.Rule {
-	if min < 0 {
-		panic("min must be non-negative")
+	// check min and max, panic if invalid
+	if minLen < 0 {
+		panic("minLen must be non-negative")
 	}
-	if max >= 0 && max < min {
-		panic("max must be greater than or equal to min, or -1 for unlimited")
-	}
-
-	// 1. 'count' is declared *outside* the returned rules.
-	//    This is the closure's state and will persist across calls.
-	var count int
-
-	// 2. We declare the 'loop' rule so it can refer to itself recursively.
-	var loop textlexer.Rule
-
-	// This is the main loop for matching subsequent characters.
-	loop = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		if characterClass(s.Rune()) {
-			count++
-			if max != -1 && count >= max {
-				// We've hit the maximum allowed characters. Accept and stop.
-				// We don't push back because this character is part of the match.
-				return nil, textlexer.StateAccept
-			}
-			// The character is valid, continue the loop.
-			return loop, textlexer.StateContinue
-		}
-
-		// The character does NOT match the class. The token has ended.
-		if count < min {
-			// We didn't find the minimum required characters.
-			return nil, textlexer.StateReject
-		}
-
-		// 3. We found a valid token. Push back the current non-matching
-		//    symbol and accept the match up to this point.
-		return PushBackCurrentAndAccept(s)
+	if maxLen != -1 && maxLen < minLen {
+		panic("maxLen must be -1 (unlimited) or >= minLen")
 	}
 
-	// This is the entry point for the rule.
 	return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		// Reset the count for a new potential token.
-		count = 0
+		var loop textlexer.Rule
+		sp := processor.NewStateProcessor()
 
-		if characterClass(s.Rune()) {
-			count++
-			// If min is 1 and max is 1, we can accept immediately.
-			if min <= 1 && max == 1 {
+		loop = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+			start, offset := sp.Position()
+			currentLen := int(start + offset)
+
+			// Check if character belongs to the class
+			if !characterClass(s.Rune()) {
+				// Character doesn't match
+				if currentLen < minLen {
+					// Haven't reached minimum length yet
+					return nil, textlexer.StateReject
+				}
+				// We've matched enough characters, push back this one
+				return nil, textlexer.StateReject
+			}
+
+			// Character matches the class
+			err := sp.Execute(textlexer.StateContinue)
+			if err != nil {
+				panic(err)
+			}
+
+			start, offset = sp.Position()
+			currentLen = int(start + offset)
+
+			// Check if we've reached maximum length
+			if maxLen != -1 && currentLen >= maxLen {
+				// Reached max length, accept but don't continue
 				return nil, textlexer.StateAccept
 			}
-			// Otherwise, transition to the loop.
+
+			// Check if we've reached minimum length
+			if currentLen >= minLen {
+				// At or above minimum, accept and continue
+				return loop, textlexer.StateAccept
+			}
+
+			// Below minimum, continue without accepting
 			return loop, textlexer.StateContinue
 		}
 
-		// First character didn't match.
-		if min == 0 {
-			// A zero-length match is valid, push back and accept.
-			return PushBackCurrentAndAccept(s)
+		return loop(s)
+	}
+}
+
+// newStartPartMatcher creates a rule that matches a sequence of characters
+// defined by two character classes: one for the starting character and one for
+// all subsequent characters.
+func newStartPartMatcher(
+	isStart func(rune) bool,
+	isPart func(rune) bool,
+) textlexer.Rule {
+	var maybePart textlexer.Rule
+
+	maybePart = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		r := s.Rune()
+
+		if isPart(r) || isStart(r) {
+			return maybePart, textlexer.StateAccept
+		}
+
+		return nil, textlexer.StateReject
+	}
+
+	return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if isStart(s.Rune()) {
+			return maybePart, textlexer.StateAccept
 		}
 
 		return nil, textlexer.StateReject

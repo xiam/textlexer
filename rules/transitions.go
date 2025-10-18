@@ -1,6 +1,8 @@
 package rules
 
 import (
+	stdlog "log"
+
 	"github.com/xiam/textlexer"
 )
 
@@ -23,11 +25,22 @@ func PushBackCurrentAndAccept(s textlexer.Symbol) (textlexer.Rule, textlexer.Sta
 
 // Backtrack returns a rule that asks the scanner to move back `n` positions in
 // the input stream, and then continue with the specified state.
-func Backtrack(n int, state textlexer.State) textlexer.Rule {
+func Backtrack(n int, endState textlexer.State) textlexer.Rule {
 	return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 		if n > 0 {
-			return Backtrack(n-1, state), textlexer.StatePushBack
+			stdlog.Printf("backtrack: Backtracking %d positions...", n)
+			return Backtrack(n-1, endState), textlexer.StatePushBack
 		}
-		return nil, state
+		return nil, endState
+	}
+}
+
+func BacktrackAndContinue(n int, nextRule textlexer.Rule) textlexer.Rule {
+	return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if n > 0 {
+			stdlog.Printf("backtrack: Backtracking %d positions...", n)
+			return BacktrackAndContinue(n-1, nextRule), textlexer.StatePushBack
+		}
+		return nextRule, textlexer.StateContinue
 	}
 }
