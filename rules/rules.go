@@ -321,85 +321,80 @@ func SignedFloat() textlexer.Rule {
 	}
 }
 
-/*
-// Sequence creates a rule that matches a series of other rules in a specific
-// order. The entire sequence must match for the rule to succeed. This is a
-// powerful combinator for building complex tokens from simpler parts.
+// Sequence creates a rule that matches a sequence of sub-rules in order.
 func Sequence(rules ...textlexer.Rule) textlexer.Rule {
-		if len(rules) == 0 {
-			panic("Sequence requires at least one rule")
-		}
+	var buildMatcher func(index int) textlexer.Rule
+	var ruleMatcher func(processor.StateProcessor, textlexer.Rule, int) textlexer.Rule
 
-		var build func(ruleIndex int) textlexer.Rule
+	if len(rules) == 0 {
+		panic("Sequence requires at least one rule")
+	}
 
-		build = func(ruleIndex int) textlexer.Rule {
-			return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-				currentRule := rules[ruleIndex]
-				isLastRule := ruleIndex == len(rules)-1
-
-				nextSubRule, subState := currentRule(s)
-
-				// --- Case 1: Rejection ---
-				if subState == textlexer.StateReject {
-					return nil, textlexer.StateReject
-				}
-
-				// --- Case 2: Sub-rule is continuing its own multi-symbol match ---
-				if nextSubRule != nil {
-					var nextMainRule textlexer.Rule
-					if !isLastRule {
-						// Create a new nested Sequence that first finishes this sub-rule,
-						// then continues with the rest of this Sequence's rules.
-						remainingRules := rules[ruleIndex+1:]
-						nextMainRule = Sequence(append([]textlexer.Rule{nextSubRule}, remainingRules...)...)
-					} else {
-						// This is the last rule in the sequence, and it's continuing.
-						nextMainRule = nextSubRule
-					}
-
-					// The overall state for the Sequence.
-					var finalState textlexer.State
-					if subState == textlexer.StatePushBack {
-						finalState = textlexer.StatePushBack
-					} else if isLastRule && subState == textlexer.StateAccept {
-						finalState = textlexer.StateAccept
-					} else {
-						finalState = textlexer.StateContinue
-					}
-					return nextMainRule, finalState
-				}
-
-				// --- Case 3: Sub-rule has FINISHED (nextSubRule is nil) ---
-
-				// If this was the last rule in the sequence, the entire sequence is complete.
-				if isLastRule {
-					return nil, subState // Propagate the final state (Accept or PushBack)
-				}
-
-				// This was NOT the last rule. We must transition to the next rule.
-				nextRuleInSequence := build(ruleIndex + 1)
-
-				// CRITICAL FIX: If the sub-rule finished with a PushBack (like Optional),
-				// we must immediately evaluate the next rule in the sequence with the
-				// current symbol `s`. This handles the transition internally.
-				if subState == textlexer.StatePushBack {
-					return nextRuleInSequence(s)
-				}
-
-				// The sub-rule finished by consuming the symbol. The Sequence now transitions
-				// to the next rule, and the processor should feed it the *next* symbol.
-				return nextRuleInSequence, textlexer.StateContinue
+	ruleMatcher = func(sp processor.StateProcessor, currentRule textlexer.Rule, index int) textlexer.Rule {
+		isLastRule := index == len(rules)-1
+		return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+			slog.Debug("Sequence: invoked", "ruleIndex", index, "symbol", string(s.Rune()), "isEOF", s.IsEOF())
+			nextRule, state := currentRule(s)
+			err := sp.Execute(state)
+			if err != nil {
+				slog.Warn("Sequence: processor error", "error", err)
+				return nil, textlexer.StateReject
 			}
+			start, offset := sp.Position()
+			slog.Debug("Sequence: rule index", "index", index, "state", state, "start", start, "offset", offset)
+
+			if state == textlexer.StateAccept {
+				if nextRule == nil {
+					if isLastRule {
+						slog.Debug("Sequence: last rule accepted, sequence complete (nextRule is nil)")
+						return nil, textlexer.StateAccept
+					}
+					slog.Debug("Sequence: rule accepted, no next rule")
+					return buildMatcher(index + 1), textlexer.StateContinue
+				}
+				slog.Debug("Sequence: rule accepted, moving to next rule", "currentIndex", index)
+				if isLastRule && s.IsEOF() {
+					return nil, textlexer.StateAccept
+				}
+				return ruleMatcher(sp, nextRule, index), textlexer.StateContinue
+			}
+
+			if state == textlexer.StateReject {
+				accepted, offset := sp.Position()
+				if accepted > 0 {
+					// Rejected, but we had some matches before rejection.
+					slog.Debug("Sequence: rule rejected", "accepted", accepted, "offset", offset)
+					if isLastRule {
+						return Backtrack(int(offset)+1, textlexer.StateAccept)(s)
+					}
+					return BacktrackAndContinue(
+						int(offset)+1,
+						buildMatcher(index+1),
+					)(s)
+				}
+			}
+
+			slog.Debug("Sequence: rule state", "state", state)
+
+			if nextRule == nil {
+				return nil, state
+			}
+
+			return ruleMatcher(sp, nextRule, index), state
 		}
+	}
 
-		return build(0)
+	buildMatcher = func(index int) textlexer.Rule {
+		sp := processor.NewStateProcessor()
+		initialRule := rules[index]
+		return ruleMatcher(sp, initialRule, index)
+	}
+
+	return buildMatcher(0)
 }
-*/
 
-// Choice creates a rule that matches if any of the provided sub-rules match.
-// The lexer's standard "longest match" principle still applies across all
-// successful choices. This is ideal for creating a single token type from
-// multiple possible patterns, such as different comment styles or number prefixes.
+// Choice creates a rule that tries multiple sub-rules and matches if any one
+// of them matches.
 func Choice(choices ...textlexer.Rule) textlexer.Rule {
 	var buildChoice func(choices []textlexer.Rule) textlexer.Rule
 
@@ -455,7 +450,6 @@ func HexIntegerBody() textlexer.Rule {
 	)
 }
 
-/*
 // Hexadecimal matches a C-style hexadecimal number, like `0xABC` or `0X123`.
 // It uses a Choice combinator to handle both '0x' and '0X' prefixes.
 func Hexadecimal() textlexer.Rule {
@@ -467,7 +461,6 @@ func Hexadecimal() textlexer.Rule {
 		HexIntegerBody(),
 	)
 }
-*/
 
 func pushbackAndContinue(n int, nextRule textlexer.Rule) textlexer.Rule {
 	return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
@@ -642,12 +635,4 @@ func Lookahead(
 		processor.NewStateProcessor(),
 		rule,
 	)
-}
-
-// NegativeLookahead creates a rule that matches the first rule only if it is
-// NOT followed by the second rule. The second rule's symbols are not consumed.
-func NegativeLookahead(matchRule textlexer.Rule, notFollowedByRule textlexer.Rule) textlexer.Rule {
-	return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		panic("not implemented")
-	}
 }

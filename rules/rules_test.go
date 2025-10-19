@@ -985,7 +985,6 @@ func TestSignedFloatRule(t *testing.T) {
 	}
 }
 
-/*
 func TestChoiceAndHexadecimalRule(t *testing.T) {
 	const (
 		lexTypeHex = textlexer.LexemeType("HEX")
@@ -1037,13 +1036,11 @@ func TestChoiceAndHexadecimalRule(t *testing.T) {
 			setupRules: func(lx *textlexer.TextLexer) {
 				lx.MustAddRule(lexTypeHex, rules.Hexadecimal())
 				lx.MustAddRule(lexTypeInt, rules.UnsignedInteger) // Fallback for the '0'
+				lx.MustAddRule("ID", rules.Identifier())
 			},
 			expectedLexemes: []*textlexer.Lexeme{
 				textlexer.NewLexemeFromString(lexTypeInt, "0", 0),
-				textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "z", 1),
-				textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "F", 2),
-				textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "F", 3),
-				textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "F", 4),
+				textlexer.NewLexemeFromString("ID", "zFFF", 1),
 			},
 		},
 		{
@@ -1077,7 +1074,6 @@ func TestChoiceAndHexadecimalRule(t *testing.T) {
 		})
 	}
 }
-*/
 
 func TestChoiceRule_ComparisonOperators(t *testing.T) {
 	const (
@@ -1610,153 +1606,6 @@ func TestLookahead(t *testing.T) {
 	}
 }
 
-func TestNegativeLookahead(t *testing.T) {
-	t.Skip("Skipping until textlexer/rules.go is updated to include NegativeLookahead")
-
-	const (
-		lexTypeKeyword    = textlexer.LexemeType("KEYWORD")
-		lexTypeIdentifier = textlexer.LexemeType("IDENTIFIER")
-		lexTypeWhitespace = textlexer.LexemeType("WHITESPACE")
-		lexTypeSlash      = textlexer.LexemeType("SLASH")
-		lexTypeLineCm     = textlexer.LexemeType("LINE_COMMENT")
-		lexTypeBlockCm    = textlexer.LexemeType("BLOCK_COMMENT")
-	)
-
-	// Helper to check for characters that can be part of an identifier.
-	// This logic is duplicated from the unexported `isIdentifierPart` function for testing purposes.
-	isIdentifierPart := func(r rune) bool {
-		return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || r == '_' || (r >= '0' && r <= '9')
-	}
-	isIdentifierPartRule := func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		if isIdentifierPart(s.Rune()) {
-			return nil, textlexer.StateAccept
-		}
-		return nil, textlexer.StateReject
-	}
-
-	testCases := []struct {
-		name            string
-		input           string
-		setupRules      func(lx *textlexer.TextLexer)
-		expectedLexemes []*textlexer.Lexeme
-	}{
-		{
-			name:  "Keyword NOT followed by identifier part (success)",
-			input: "end)",
-			setupRules: func(lx *textlexer.TextLexer) {
-				lx.MustAddRule(lexTypeKeyword, rules.NegativeLookahead(
-					rules.Literal("end"),
-					isIdentifierPartRule,
-				))
-				lx.MustAddRule(lexTypeIdentifier, rules.Identifier())
-				lx.MustAddRule("PAREN", rules.Literal(")"))
-			},
-			expectedLexemes: []*textlexer.Lexeme{
-				textlexer.NewLexemeFromString(lexTypeKeyword, "end", 0),
-				textlexer.NewLexemeFromString("PAREN", ")", 3),
-			},
-		},
-		{
-			name:  "Keyword lookalike IS followed by identifier part (failure)",
-			input: "ending",
-			setupRules: func(lx *textlexer.TextLexer) {
-				lx.MustAddRule(lexTypeKeyword, rules.NegativeLookahead(
-					rules.Literal("end"),
-					isIdentifierPartRule,
-				))
-				lx.MustAddRule(lexTypeIdentifier, rules.Identifier())
-			},
-			expectedLexemes: []*textlexer.Lexeme{
-				// The NegativeLookahead rule fails, so the longer Identifier rule wins.
-				textlexer.NewLexemeFromString(lexTypeIdentifier, "ending", 0),
-			},
-		},
-		{
-			name:  "Keyword at EOF (success)",
-			input: "end",
-			setupRules: func(lx *textlexer.TextLexer) {
-				lx.MustAddRule(lexTypeKeyword, rules.NegativeLookahead(
-					rules.Literal("end"),
-					isIdentifierPartRule,
-				))
-				lx.MustAddRule(lexTypeIdentifier, rules.Identifier())
-			},
-			expectedLexemes: []*textlexer.Lexeme{
-				textlexer.NewLexemeFromString(lexTypeKeyword, "end", 0),
-			},
-		},
-		{
-			name:  "Slash not followed by comment starter (success)",
-			input: "/a",
-			setupRules: func(lx *textlexer.TextLexer) {
-				lx.MustAddRule(lexTypeSlash, rules.NegativeLookahead(
-					rules.Literal("/"),
-					rules.Choice(rules.Literal("/"), rules.Literal("*")),
-				))
-				lx.MustAddRule(lexTypeIdentifier, rules.Identifier())
-			},
-			expectedLexemes: []*textlexer.Lexeme{
-				textlexer.NewLexemeFromString(lexTypeSlash, "/", 0),
-				textlexer.NewLexemeFromString(lexTypeIdentifier, "a", 1),
-			},
-		},
-		{
-			name:  "Slash followed by / (failure)",
-			input: "// comment",
-			setupRules: func(lx *textlexer.TextLexer) {
-				lx.MustAddRule(lexTypeSlash, rules.NegativeLookahead(
-					rules.Literal("/"),
-					rules.Choice(rules.Literal("/"), rules.Literal("*")),
-				))
-				// A rule for line comments must exist for the lexer to make progress
-				lx.MustAddRule(lexTypeLineCm, rules.Literal("//"))
-				lx.MustAddRule(lexTypeIdentifier, rules.Identifier())
-				lx.MustAddRule(lexTypeWhitespace, rules.Whitespace)
-			},
-			expectedLexemes: []*textlexer.Lexeme{
-				// NegativeLookahead fails, Literal("//") wins
-				textlexer.NewLexemeFromString(lexTypeLineCm, "//", 0),
-				textlexer.NewLexemeFromString(lexTypeWhitespace, " ", 2),
-				textlexer.NewLexemeFromString(lexTypeIdentifier, "comment", 3),
-			},
-		},
-		{
-			name:  "Slash followed by * (failure)",
-			input: "/* comment */",
-			setupRules: func(lx *textlexer.TextLexer) {
-				lx.MustAddRule(lexTypeSlash, rules.NegativeLookahead(
-					rules.Literal("/"),
-					rules.Choice(rules.Literal("/"), rules.Literal("*")),
-				))
-				// A rule for block comments must exist
-				lx.MustAddRule(lexTypeBlockCm, rules.Delimited("/*", "*/", 0))
-			},
-			expectedLexemes: []*textlexer.Lexeme{
-				textlexer.NewLexemeFromString(lexTypeBlockCm, "/* comment */", 0),
-			},
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			lx := textlexer.New(strings.NewReader(tc.input))
-			tc.setupRules(lx)
-
-			var foundLexemes []*textlexer.Lexeme
-			for {
-				lex, err := lx.Next()
-				if err == io.EOF {
-					break
-				}
-				require.NoError(t, err)
-				foundLexemes = append(foundLexemes, lex)
-			}
-			assert.Equal(t, tc.expectedLexemes, foundLexemes)
-		})
-	}
-}
-
-/*
 func TestSequenceRule(t *testing.T) {
 	// Define some lexeme types for clarity
 	const (
@@ -1765,7 +1614,7 @@ func TestSequenceRule(t *testing.T) {
 		lexTypeWhitespace = textlexer.LexemeType("WHITESPACE")
 		lexTypeAB         = textlexer.LexemeType("AB")
 		lexTypeInt        = textlexer.LexemeType("INT")
-		lexTypeUntilEOF   = textlexer.LexemeType("UNTIL_EOF")
+		lexTypeUnknown    = textlexer.LexemeTypeUnknown
 	)
 
 	testCases := []struct {
@@ -1778,7 +1627,7 @@ func TestSequenceRule(t *testing.T) {
 		{
 			name:  "Simple sequence of two literals",
 			input: "ab",
-			rule:  rules.Sequence(
+			rule: rules.Sequence(
 				rules.Literal("a"),
 				rules.Literal("b"),
 			),
@@ -1789,13 +1638,18 @@ func TestSequenceRule(t *testing.T) {
 		{
 			name:  "Sequence fails on second element",
 			input: "ac",
-			rule:  rules.Sequence(rules.Literal("a"), rules.Literal("b")),
+			rule: rules.Sequence(
+				rules.Literal("a"),
+				rules.Literal("b"),
+			),
 			setupExtraRules: func(lx *textlexer.TextLexer) {
 				// Provide fallbacks so we can see what happens after the failure.
-				lx.MustAddRule(lexTypeUntilEOF, rules.UntilEOF())
+				lx.MustAddRule("A", rules.Literal("a"))
+				lx.MustAddRule("C", rules.Literal("c"))
 			},
 			expectedLexemes: []*textlexer.Lexeme{
-				textlexer.NewLexemeFromString(lexTypeUntilEOF, "ac", 0),
+				textlexer.NewLexemeFromString("A", "a", 0),
+				textlexer.NewLexemeFromString("C", "c", 1),
 			},
 		},
 		{
@@ -1818,7 +1672,7 @@ func TestSequenceRule(t *testing.T) {
 				rules.Literal("x"),
 			),
 			expectedLexemes: []*textlexer.Lexeme{
-				// UnsignedInteger matches "123" and pushes back "x".
+				// UnsignedInteger matches "123" and signals completion by rejecting "x".
 				// The sequence combinator must correctly feed "x" to the next rule.
 				textlexer.NewLexemeFromString(lexTypeSequence, "123x", 0),
 			},
@@ -1885,11 +1739,10 @@ func TestSequenceRule(t *testing.T) {
 				// The main rule fails on "x". The lexer finds the next best match.
 				// The rule for "ab" is a valid, completed match.
 				lx.MustAddRule(lexTypeAB, rules.Literal("ab"))
-				lx.MustAddRule(lexTypeIdentifier, rules.Identifier())
 			},
 			expectedLexemes: []*textlexer.Lexeme{
 				textlexer.NewLexemeFromString(lexTypeAB, "ab", 0),
-				textlexer.NewLexemeFromString(lexTypeIdentifier, "x", 2),
+				textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "x", 2),
 			},
 		},
 		{
@@ -1935,4 +1788,3 @@ func TestSequenceRule(t *testing.T) {
 		})
 	}
 }
-*/
