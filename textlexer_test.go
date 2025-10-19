@@ -1032,12 +1032,7 @@ func TestLexerProcessor(t *testing.T) {
 				foundLexemes = append(foundLexemes, lex)
 			}
 
-			ok := assert.Equal(t, tc.expectedLexemes, foundLexemes, "The stream of lexemes did not match the expected output.")
-			if !ok {
-				for i, lex := range foundLexemes {
-					t.Logf("\tFound[%d]\tText=%q, Type=%q, Offset=%d, Length=%d", i, lex.Text(), lex.Type(), lex.Offset(), lex.Len())
-				}
-			}
+			assertLexemesEqual(t, tc.expectedLexemes, foundLexemes)
 
 			_, err := lx.Next()
 			require.Equal(t, io.EOF, err, "Expected EOF after consuming all tokens")
@@ -1475,7 +1470,7 @@ func TestLexerPathologicalRuleWithDeepBacktracking(t *testing.T) {
 				found = append(found, lex)
 			}
 
-			assert.Equal(t, tc.expected, found, "Backtrack depth %d failed", tc.backtrackDepth)
+			assertLexemesEqual(t, tc.expected, found)
 		})
 	}
 }
@@ -1700,7 +1695,7 @@ func TestLexerPathologicalRules(t *testing.T) {
 			require.NoError(t, err)
 			found = append(found, lex)
 		}
-		assert.Equal(t, expected, found)
+		assertLexemesEqual(t, expected, found)
 	})
 
 	t.Run("Bait and Switch Rule", func(t *testing.T) {
@@ -1771,7 +1766,7 @@ func TestLexerPathologicalRules(t *testing.T) {
 			require.NoError(t, err)
 			found = append(found, lex)
 		}
-		assert.Equal(t, expected, found)
+		assertLexemesEqual(t, expected, found)
 	})
 
 	t.Run("Rule Rejects After Full Buffer Consumption (Veto Rule)", func(t *testing.T) {
@@ -1832,7 +1827,7 @@ func TestLexerPathologicalRules(t *testing.T) {
 			require.NoError(t, err)
 			found = append(found, lex)
 		}
-		assert.Equal(t, expected, found)
+		assertLexemesEqual(t, expected, found)
 	})
 
 	t.Run("Rule Returns nil with StatePushBack", func(t *testing.T) {
@@ -1870,7 +1865,7 @@ func TestLexerPathologicalRules(t *testing.T) {
 			require.NoError(t, err)
 			found = append(found, lex)
 		}
-		assert.Equal(t, expected, found)
+		assertLexemesEqual(t, expected, found)
 	})
 
 	t.Run("Always Reject Rule", func(t *testing.T) {
@@ -1899,7 +1894,7 @@ func TestLexerPathologicalRules(t *testing.T) {
 			require.NoError(t, err)
 			found = append(found, lex)
 		}
-		assert.Equal(t, expected, found)
+		assertLexemesEqual(t, expected, found)
 	})
 
 	t.Run("Always Accept Rule", func(t *testing.T) {
@@ -1928,7 +1923,7 @@ func TestLexerPathologicalRules(t *testing.T) {
 			require.NoError(t, err)
 			found = append(found, lex)
 		}
-		assert.Equal(t, expected, found)
+		assertLexemesEqual(t, expected, found)
 	})
 
 	t.Run("Exponential State Explosion", func(t *testing.T) {
@@ -2048,7 +2043,7 @@ func TestLexerPathologicalRules(t *testing.T) {
 			require.NoError(t, err)
 			found = append(found, lex)
 		}
-		assert.Equal(t, expected, found)
+		assertLexemesEqual(t, expected, found)
 	})
 
 	t.Run("Buffer Overflow Attempt", func(t *testing.T) {
@@ -3130,4 +3125,21 @@ func TestLexerProcessorRecreationWithNewRules(t *testing.T) {
 	// Now, add a new rule. This should be rejected because the processor is already created.
 	err = lx.AddRule(lexTypeB, matchString("b"))
 	require.Error(t, err, "Should not allow adding rules after processor creation")
+}
+
+func assertLexemesEqual(t *testing.T, expected []*textlexer.Lexeme, actual []*textlexer.Lexeme) {
+	require.Equal(t, len(expected), len(actual), "Lexeme count mismatch")
+	for i := range expected {
+		assertLexemeEqual(t, actual[i], expected[i])
+	}
+}
+
+func assertLexemeEqual(t *testing.T, actual *textlexer.Lexeme, expected *textlexer.Lexeme) {
+	require.NotNil(t, actual)
+	require.NotNil(t, expected)
+
+	assert.Equal(t, expected.Type(), actual.Type(), "Lexeme type mismatch")
+	assert.Equal(t, expected.Text(), actual.Text(), "Lexeme text mismatch")
+	assert.Equal(t, expected.Offset(), actual.Offset(), "Lexeme offset mismatch")
+	assert.Equal(t, expected.Len(), actual.Len(), "Lexeme length mismatch")
 }

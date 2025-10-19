@@ -14,8 +14,7 @@ import (
 )
 
 // TextLexer orchestrates the tokenization of an input stream according to a
-// set of user-defined rules. It manages input buffering, state tracking (line
-// and column numbers), and the rule processing engine.
+// set of user-defined rules.
 type TextLexer struct {
 	rules    []LexemeType
 	rulesMap map[LexemeType]Rule
@@ -72,8 +71,6 @@ func (lx *TextLexer) MustAddRule(lexType LexemeType, lexRule Rule) {
 }
 
 // Next reads from the input and returns the next recognized Lexeme.
-//
-// This method is safe for concurrent use by multiple goroutines.
 func (lx *TextLexer) Next() (*Lexeme, error) {
 	lx.mu.Lock()
 	defer lx.mu.Unlock()
@@ -92,7 +89,7 @@ func (lx *TextLexer) Next() (*Lexeme, error) {
 			}
 		}
 
-		typ, runes, accepted, err := lx.nextLexeme()
+		typ, symbols, accepted, err := lx.nextLexeme()
 		if typ == LexemeTypeUnspecified {
 			// Need more input
 			continue
@@ -101,7 +98,7 @@ func (lx *TextLexer) Next() (*Lexeme, error) {
 			return nil, err
 		}
 
-		lex := NewLexeme(typ, runes, lx.runesAccepted)
+		lex := NewLexeme(typ, symbols, lx.runesAccepted)
 		lx.runesAccepted += accepted
 		return lex, nil
 	}
@@ -124,20 +121,15 @@ func (lx *TextLexer) feedProcessor() error {
 	return nil
 }
 
-func (lx *TextLexer) nextLexeme() (LexemeType, []rune, uint64, error) {
-	typ, match, matchLen := lx.processor.Process()
+// nextLexeme returns the next lexeme without any allocation.
+func (lx *TextLexer) nextLexeme() (LexemeType, []Symbol, uint64, error) {
+	typ, symbols, matchLen := lx.processor.Process()
 	if typ == LexemeTypeUnspecified {
 		// Needs more input to decide.
 		return typ, nil, 0, nil
 	}
 
-	// Convert matched symbols to runes.
-	runes := make([]rune, len(match))
-	for i := uint64(0); i < matchLen; i++ {
-		runes[i] = match[i].Rune()
-	}
-
-	return typ, runes, matchLen, nil
+	return typ, symbols, matchLen, nil
 }
 
 func (lx *TextLexer) initProcessor() error {

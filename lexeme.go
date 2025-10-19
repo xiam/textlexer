@@ -26,25 +26,30 @@ func (lt LexemeType) String() string {
 type Lexeme struct {
 	typ LexemeType
 
-	text   []rune
-	offset uint64
+	symbols []Symbol
+	offset  uint64
 }
 
 // NewLexeme creates and returns a new Lexeme.
-func NewLexeme(typ LexemeType, text []rune, offset uint64) *Lexeme {
+func NewLexeme(typ LexemeType, symbols []Symbol, offset uint64) *Lexeme {
 	return &Lexeme{
-		typ:    typ,
-		text:   text,
-		offset: offset,
+		typ:     typ,
+		symbols: symbols,
+		offset:  offset,
 	}
 }
 
 // NewLexemeFromString creates and returns a new Lexeme from a string.
 func NewLexemeFromString(typ LexemeType, text string, offset uint64) *Lexeme {
+	runes := []rune(text)
+	symbols := make([]Symbol, len(runes))
+	for i, r := range runes {
+		symbols[i] = NewSymbol(r, FlagNone)
+	}
 	return &Lexeme{
-		typ:    typ,
-		text:   []rune(text),
-		offset: offset,
+		typ:     typ,
+		symbols: symbols,
+		offset:  offset,
 	}
 }
 
@@ -55,7 +60,11 @@ func (l *Lexeme) Type() LexemeType {
 
 // Text returns the textual content of the lexeme as a string.
 func (l *Lexeme) Text() string {
-	return string(l.text)
+	runes := make([]rune, len(l.symbols))
+	for i, sym := range l.symbols {
+		runes[i] = sym.Rune()
+	}
+	return string(runes)
 }
 
 // Offset returns the zero-based starting position of the lexeme in the
@@ -67,5 +76,11 @@ func (l *Lexeme) Offset() uint64 {
 // Len returns the length of the lexeme's text in runes. This is useful for
 // calculating the end position (Offset + Len).
 func (l *Lexeme) Len() int {
-	return len(l.text)
+	return len(l.symbols)
+}
+
+// Symbols returns the underlying symbols that make up this lexeme.
+// This provides access to positional information (BOF, EOL, etc.) if needed.
+func (l *Lexeme) Symbols() []Symbol {
+	return l.symbols
 }
