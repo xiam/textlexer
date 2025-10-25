@@ -11,16 +11,21 @@ type ruleScanner struct {
 	initialRule Rule
 	rule        Rule
 
-	acceptedLen uint64
-	currentPos  uint64
+	// lastAcceptedLength tracks how many symbols have been accepted for the
+	// current token. Updated each time StateAccept is executed.
+	lastAcceptedLength uint64
+
+	// explorationPos tracks the current position being explored (start +
+	// offset).  This is where the next symbol will be read from.
+	explorationPos uint64
 }
 
 func (rs *ruleScanner) AcceptedLength() uint64 {
-	return rs.acceptedLen
+	return rs.lastAcceptedLength
 }
 
 func (rs *ruleScanner) CurrentPosition() uint64 {
-	return rs.currentPos
+	return rs.explorationPos
 }
 
 func (rs *ruleScanner) Scan(sym Symbol) (bool, error) {
@@ -35,9 +40,17 @@ func (rs *ruleScanner) Scan(sym Symbol) (bool, error) {
 		return false, fmt.Errorf("error processing state: %w", err)
 	}
 
-	var offset uint64
-	rs.acceptedLen, offset = rs.sp.Position()
-	rs.currentPos = rs.acceptedLen + offset
+	// After execution, get the current position:
+	// - nextTokenStart: length of accepted token so far (from position 0)
+	// - lookAheadOffset: current offset from that position
+	nextTokenStart, lookAheadOffset := rs.sp.Position()
+
+	// Update last accepted length if we just accepted more symbols
+	rs.lastAcceptedLength = nextTokenStart
+
+	// Update exploration position for the next scan
+	rs.explorationPos = nextTokenStart + lookAheadOffset
+
 	rs.rule = nextRule
 
 	return rs.rule != nil, nil
@@ -50,8 +63,8 @@ func (rs *ruleScanner) IsActive() bool {
 func (rs *ruleScanner) Reset() {
 	rs.rule = rs.initialRule
 	rs.sp = processor.NewStateProcessor()
-	rs.acceptedLen = 0
-	rs.currentPos = 0
+	rs.lastAcceptedLength = 0
+	rs.explorationPos = 0
 }
 
 func NewRuleScanner(initial Rule) *ruleScanner {

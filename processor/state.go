@@ -5,27 +5,35 @@ import "fmt"
 // State represents an instruction for the state processor VM.
 // Each state modifies the internal start and offset values differently,
 // enabling flexible sequential processing with lookahead and backtracking.
+//
+// The processor maintains:
+//   - start: the committed position (beginning of next potential token)
+//   - offset: the lookahead distance from start
+//   - current position = start + offset
 type State uint
 
 const (
-	// StateContinue advances the offset by one position.
-	// Used to continue scanning/processing forward through input.
+	// StateContinue advances to examine the next symbol.
 	// Operation: offset = offset + 1
+	// Position after: start + (offset+1)
 	StateContinue State = iota
 
-	// StateAccept commits the current position and resets the offset.
-	// Used to mark a successful match/parse and advance the start position.
+	// StateAccept commits all symbols up to and including the current position.
+	// The +1 moves start past the last accepted symbol to begin the next token.
 	// Operation: start = start + offset + 1, offset = 0
+	// Position after: (start + offset + 1) + 0
 	StateAccept
 
-	// StateReject abandons the current position and resets the offset.
-	// Used to mark a failed match/parse without advancing the start position.
+	// StateReject abandons the current lookahead and returns to the last accepted position.
+	// Does not advance start, allowing different rules to be tried from the same position.
 	// Operation: offset = 0
+	// Position after: start + 0
 	StateReject
 
-	// StatePushBack moves the offset back by one position.
-	// Used for backtracking or undoing a speculative forward move.
+	// StatePushBack moves back one symbol for reconsideration.
+	// Used for backtracking when a symbol should not be part of the current match.
 	// Operation: offset = offset - 1
+	// Position after: start + (offset-1)
 	StatePushBack
 )
 
