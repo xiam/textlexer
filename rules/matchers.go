@@ -73,6 +73,8 @@ func isIdentifierPart(r rune) bool {
 // newCharacterClassMatcher creates a rule that matches a sequence of
 // characters belonging to a specified character class, with defined minimum
 // and maximum lengths.
+//
+// Panics if minLen is negative or if maxLen is not -1 and less than minLen.
 func newCharacterClassMatcher(
 	characterClass func(rune) bool,
 	minLen int,
@@ -106,9 +108,10 @@ func newCharacterClassMatcher(
 			}
 
 			// Character matches the class
-			err := sp.Execute(textlexer.StateContinue)
-			if err != nil {
-				panic(err)
+			if err := sp.Execute(textlexer.StateContinue); err != nil {
+				// This indicates a logical error in the state processor itself,
+				// but we shouldn't panic. Rejecting is the safest option.
+				return nil, textlexer.StateReject
 			}
 
 			start, offset = sp.Position()

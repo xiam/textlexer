@@ -1,22 +1,9 @@
 package rules
 
 import (
-	"log/slog"
-	"os"
-
 	"github.com/xiam/textlexer"
 	"github.com/xiam/textlexer/processor"
 )
-
-func init() {
-	// enable slog debug logging
-	slog.SetDefault(slog.New(slog.NewTextHandler(
-		os.Stderr,
-		&slog.HandlerOptions{
-			Level: slog.LevelDebug,
-		},
-	)))
-}
 
 // Whitespace matches one or more whitespace characters.
 // Example: ` `, ` \t`, `\n\r\n`, `\t\t `
@@ -106,6 +93,8 @@ func UntilEOL() textlexer.Rule {
 // Literal creates a rule that matches an exact string literal. This is ideal
 // for matching keywords (e.g., "if", "for") or multi-character operators
 // (e.g., "==", "=>").
+//
+// Panics if literal is an empty string.
 func Literal(literal string) textlexer.Rule {
 	if literal == "" {
 		panic("literal string cannot be empty")
@@ -136,6 +125,8 @@ func Literal(literal string) textlexer.Rule {
 // start and end delimiters. It can also handle a specified escape character.
 // This is ideal for matching quoted strings or block comments.
 // If escapeRune is 0, no escaping is performed.
+//
+// Panics if startDelim or endDelim are empty strings.
 func Delimited(startDelim, endDelim string, escapeRune rune) textlexer.Rule {
 	if startDelim == "" || endDelim == "" {
 		panic("start and end delimiters cannot be empty")
@@ -322,6 +313,8 @@ func SignedFloat() textlexer.Rule {
 }
 
 // Sequence creates a rule that matches a sequence of sub-rules in order.
+//
+// Panics if no rules are provided.
 func Sequence(rules ...textlexer.Rule) textlexer.Rule {
 	var buildMatcher func(index int) textlexer.Rule
 	var ruleMatcher func(processor.StateProcessor, textlexer.Rule, int) textlexer.Rule
@@ -333,26 +326,19 @@ func Sequence(rules ...textlexer.Rule) textlexer.Rule {
 	ruleMatcher = func(sp processor.StateProcessor, currentRule textlexer.Rule, index int) textlexer.Rule {
 		isLastRule := index == len(rules)-1
 		return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-			slog.Debug("Sequence: invoked", "ruleIndex", index, "symbol", string(s.Rune()), "isEOF", s.IsEOF())
 			nextRule, state := currentRule(s)
 			err := sp.Execute(state)
 			if err != nil {
-				slog.Warn("Sequence: processor error", "error", err)
 				return nil, textlexer.StateReject
 			}
-			start, offset := sp.Position()
-			slog.Debug("Sequence: rule index", "index", index, "state", state, "start", start, "offset", offset)
 
 			if state == textlexer.StateAccept {
 				if nextRule == nil {
 					if isLastRule {
-						slog.Debug("Sequence: last rule accepted, sequence complete (nextRule is nil)")
 						return nil, textlexer.StateAccept
 					}
-					slog.Debug("Sequence: rule accepted, no next rule")
 					return buildMatcher(index + 1), textlexer.StateContinue
 				}
-				slog.Debug("Sequence: rule accepted, moving to next rule", "currentIndex", index)
 				if isLastRule && s.IsEOF() {
 					return nil, textlexer.StateAccept
 				}
@@ -363,7 +349,6 @@ func Sequence(rules ...textlexer.Rule) textlexer.Rule {
 				accepted, offset := sp.Position()
 				if accepted > 0 {
 					// Rejected, but we had some matches before rejection.
-					slog.Debug("Sequence: rule rejected", "accepted", accepted, "offset", offset)
 					if isLastRule {
 						return Backtrack(int(offset)+1, textlexer.StateAccept)(s)
 					}
@@ -373,8 +358,6 @@ func Sequence(rules ...textlexer.Rule) textlexer.Rule {
 					)(s)
 				}
 			}
-
-			slog.Debug("Sequence: rule state", "state", state)
 
 			if nextRule == nil {
 				return nil, state
@@ -395,6 +378,8 @@ func Sequence(rules ...textlexer.Rule) textlexer.Rule {
 
 // Choice creates a rule that tries multiple sub-rules and matches if any one
 // of them matches.
+//
+// Panics if no choices are provided.
 func Choice(choices ...textlexer.Rule) textlexer.Rule {
 	var buildChoice func(choices []textlexer.Rule) textlexer.Rule
 
@@ -484,76 +469,44 @@ func Lookahead(
 
 	lookaheadRuleMatcher = func(sp processor.StateProcessor, currentLookaheadRule textlexer.Rule) textlexer.Rule {
 		return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-			slog.Debug(
-				"Lookahead[rule]: invoked",
-				"symbol", string(s.Rune()),
-				"isEOF", s.IsEOF())
-
 			nextRule, state := currentLookaheadRule(s)
-
-			slog.Debug("Lookahead[rule]: returned",
-				"state", state,
-				"hasNextRule", nextRule != nil)
 
 			switch state {
 			case textlexer.StateReject:
-				slog.Debug("Lookahead[rule]: lookahead rule rejected")
 				return nil, textlexer.StateReject
 
 			case textlexer.StateAccept:
-				slog.Debug("Lookahead[rule]: lookahead rule accepted, executing accept on processor")
 				err := sp.Execute(textlexer.StateAccept)
 				if err != nil {
-					slog.Error("Lookahead[rule]: lookahead processor error on final accept", "error", err)
 					return nil, textlexer.StateReject
 				}
 
 				start, offset := sp.Position()
 				backtrackAmount := int(start + offset)
-				slog.Debug(
-					"Lookahead[rule]: lookahead complete[1], initiating backtrack",
-					"start", start,
-					"offset", offset,
-					"backtrackAmount", backtrackAmount,
-				)
 				return Backtrack(
 					backtrackAmount,
 					textlexer.StateAccept,
 				)(s)
 
 			case textlexer.StateContinue:
-				slog.Debug("Lookahead[rule]: lookahead rule continuing")
 				err := sp.Execute(textlexer.StateContinue)
 				if err != nil {
-					slog.Error("Lookahead[rule]: lookahead processor error on continue", "error", err)
 					return nil, textlexer.StateReject
 				}
 				if nextRule == nil {
-					slog.Warn("Lookahead[rule]: lookahead rule returned Continue but nextRule is nil")
 					return nil, textlexer.StateReject
 				}
-				start, offset := sp.Position()
-				slog.Debug("Lookahead[rule]: lookahead continuing with next rule",
-					"start", start,
-					"offset", offset)
 				return lookaheadRuleMatcher(sp, nextRule), textlexer.StateContinue
 
 			case textlexer.StatePushBack:
-				slog.Debug("Lookahead[rule]: lookahead rule pushed back")
 				// A sub-rule (like a nested Lookahead's Backtrack) needs to push back.
 				// We must execute this on our internal processor to keep the final
 				// backtrack count correct, and then propagate the state and the
 				// sub-rule's next state upwards.
 				err := sp.Execute(textlexer.StatePushBack)
 				if err != nil {
-					slog.Error("Lookahead[rule]: lookahead processor error on pushback", "error", err)
 					return nil, textlexer.StateReject
 				}
-				start, offset := sp.Position()
-				slog.Debug("Lookahead[rule]: lookahead pushback executed",
-					"start", start,
-					"offset", offset,
-					"hasNextRule", nextRule != nil)
 				// We continue our own state machine, but with the next rule provided by the sub-rule.
 				return lookaheadRuleMatcher(sp, nextRule), textlexer.StatePushBack
 			}
@@ -564,57 +517,33 @@ func Lookahead(
 
 	ruleMatcher = func(sp processor.StateProcessor, currentMainRule textlexer.Rule) textlexer.Rule {
 		return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-			slog.Debug("Lookahead[main]: invoked",
-				"symbol", string(s.Rune()),
-				"isEOF", s.IsEOF())
-
 			nextRule, state := currentMainRule(s)
 
-			slog.Debug("Lookahead[main]: main rule returned",
-				"state", state,
-				"hasNextRule", nextRule != nil)
-
 			if state == textlexer.StateReject {
-				start, offset := sp.Position()
-				slog.Debug("Lookahead[main]: main rule rejected",
-					"start", start,
-					"offset", offset)
+				start, _ := sp.Position()
 				if start > 0 {
 					// "Completion Rejection": Main rule matched and is now done.
 					// Start the lookahead check with the current symbol.
-					slog.Debug("Lookahead[main]: completion rejection detected, transitioning to lookahead",
-						"start", start)
 					return lookaheadRuleMatcher(processor.NewStateProcessor(), lookaheadRule)(s)
 				}
 				// "Failure Rejection": Main rule never matched.
-				slog.Debug("Lookahead[main]: failure rejection, main rule never matched")
 				return nil, textlexer.StateReject
 			}
 
-			slog.Debug("Lookahead[main]: executing main rule state on processor",
-				"state", state)
 			err := sp.Execute(state)
 			if err != nil {
-				slog.Error("Lookahead[main]: main rule processor error", "error", err, "state", state)
 				return nil, textlexer.StateReject
 			}
-
-			start, offset := sp.Position()
-			slog.Debug("Lookahead[main]: main rule state executed",
-				"start", start,
-				"offset", offset)
 
 			if nextRule == nil {
 				// Main rule fully matched (e.g., Literal). Transition to lookahead.
-				slog.Debug("Lookahead[main]: main rule complete (nextRule is nil), transitioning to lookahead")
 				return lookaheadRuleMatcher(processor.NewStateProcessor(), lookaheadRule), textlexer.StateContinue
 			}
 
 			// Main rule needs more symbols.
+			start, offset := sp.Position()
 			if s.IsEOF() {
 				if start > 0 {
-					slog.Debug("Lookahead[main]: ### main rule incomplete at EOF but has matched symbols, transitioning to lookahead",
-						"start", start)
 					return BacktrackAndContinue(
 						int(offset)+1,
 						lookaheadRuleMatcher(
@@ -625,12 +554,10 @@ func Lookahead(
 
 				}
 			}
-			slog.Debug("Lookahead[main]: main rule needs more symbols, continuing", "isEOF", s.IsEOF())
 			return ruleMatcher(sp, nextRule), textlexer.StateContinue
 		}
 	}
 
-	slog.Debug("Lookahead[main]: creating new lookahead rule")
 	return ruleMatcher(
 		processor.NewStateProcessor(),
 		rule,
