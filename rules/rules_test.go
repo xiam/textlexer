@@ -13,12 +13,21 @@ import (
 )
 
 const (
-	lexTypeUnknown = textlexer.LexemeTypeUnknown
+	lexTypeWhitespace   = textlexer.LexemeType("WHITESPACE")
+	lexTypeIdentifier   = textlexer.LexemeType("IDENTIFIER")
+	lexTypeInteger      = textlexer.LexemeType("INTEGER")
+	lexTypeFloat        = textlexer.LexemeType("FLOAT")
+	lexTypeKeyword      = textlexer.LexemeType("KEYWORD")
+	lexTypeString       = textlexer.LexemeType("STRING")
+	lexTypeComment      = textlexer.LexemeType("COMMENT")
+	lexTypeSymbol       = textlexer.LexemeType("SYMBOL")
+	lexTypeCSSValue     = textlexer.LexemeType("CSS_VALUE")
+	lexTypeVersionPart  = textlexer.LexemeType("VERSION_PART")
+	lexTypeComparisonOp = textlexer.LexemeType("COMPARISON_OP")
+	lexTypeUnknown      = textlexer.LexemeTypeUnknown
 )
 
 func TestWhitespaceRule(t *testing.T) {
-	const lexTypeWhitespace = textlexer.LexemeType("WHITESPACE")
-
 	testCases := []struct {
 		name            string
 		input           string
@@ -100,8 +109,6 @@ func TestWhitespaceRule(t *testing.T) {
 }
 
 func TestUnsignedIntegerRule(t *testing.T) {
-	const lexTypeInteger = textlexer.LexemeType("INTEGER")
-
 	testCases := []struct {
 		name            string
 		input           string
@@ -319,11 +326,6 @@ func TestASCIIWordRule(t *testing.T) {
 }
 
 func TestIdentifierRule(t *testing.T) {
-	const (
-		lexTypeIdentifier = textlexer.LexemeType("IDENTIFIER")
-		lexTypeWhitespace = textlexer.LexemeType("WHITESPACE")
-	)
-
 	testCases := []struct {
 		name            string
 		input           string
@@ -453,10 +455,9 @@ func TestIdentifierRule(t *testing.T) {
 
 func TestLiteralRule(t *testing.T) {
 	const (
-		lexTypeIf         = textlexer.LexemeType("IF")
-		lexTypeFunc       = textlexer.LexemeType("FUNC")
-		lexTypeArrow      = textlexer.LexemeType("ARROW")
-		lexTypeIdentifier = textlexer.LexemeType("IDENTIFIER")
+		lexTypeIf    = textlexer.LexemeType("IF")
+		lexTypeFunc  = textlexer.LexemeType("FUNC")
+		lexTypeArrow = textlexer.LexemeType("ARROW")
 	)
 
 	testCases := []struct {
@@ -503,13 +504,13 @@ func TestLiteralRule(t *testing.T) {
 				lx.MustAddRule(lexTypeIf, rules.Literal("if"))
 				lx.MustAddRule(lexTypeFunc, rules.Literal("func"))
 				lx.MustAddRule(lexTypeIdentifier, rules.Identifier())
-				lx.MustAddRule("WHITESPACE", rules.Whitespace)
+				lx.MustAddRule(lexTypeWhitespace, rules.Whitespace)
 			},
 			expectedLexemes: []*textlexer.Lexeme{
 				textlexer.NewLexemeFromString(lexTypeIf, "if", 0),
-				textlexer.NewLexemeFromString("WHITESPACE", " ", 2),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, " ", 2),
 				textlexer.NewLexemeFromString(lexTypeFunc, "func", 3),
-				textlexer.NewLexemeFromString("WHITESPACE", " ", 7),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, " ", 7),
 				textlexer.NewLexemeFromString(lexTypeIdentifier, "function", 8),
 			},
 		},
@@ -545,18 +546,9 @@ func TestLiteralRule(t *testing.T) {
 			assertLexemesEqual(t, tc.expectedLexemes, foundLexemes)
 		})
 	}
-
-	t.Run("Panics on Empty Literal", func(t *testing.T) {
-		assert.Panics(t, func() {
-			rules.Literal("")
-		}, "Literal factory should panic if given an empty string")
-	})
 }
 
 func TestDelimitedRule(t *testing.T) {
-	const lexTypeString = textlexer.LexemeType("STRING")
-	const lexTypeComment = textlexer.LexemeType("COMMENT")
-
 	testCases := []struct {
 		name            string
 		input           string
@@ -607,7 +599,7 @@ func TestDelimitedRule(t *testing.T) {
 			name:  "Multi-character Delimiter Comment",
 			input: `/* this is a comment */`,
 			setupRules: func(lx *textlexer.TextLexer) {
-				lx.MustAddRule(lexTypeComment, rules.Delimited(`/*`, `*/`, 0)) // No escape rune
+				lx.MustAddRule(lexTypeComment, rules.Delimited(`/*`, `*/`, 0))
 			},
 			expectedLexemes: []*textlexer.Lexeme{
 				textlexer.NewLexemeFromString(lexTypeComment, `/* this is a comment */`, 0),
@@ -648,6 +640,40 @@ func TestDelimitedRule(t *testing.T) {
 				textlexer.NewLexemeFromString("PARENS", `(a test)`, 0),
 			},
 		},
+		{
+			name:  "Escape at EOF",
+			input: `"hello\`,
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule(lexTypeString, rules.Delimited(`"`, `"`, '\\'))
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString(lexTypeUnknown, `"`, 0),
+				textlexer.NewLexemeFromString(lexTypeUnknown, "h", 1),
+				textlexer.NewLexemeFromString(lexTypeUnknown, "e", 2),
+				textlexer.NewLexemeFromString(lexTypeUnknown, "l", 3),
+				textlexer.NewLexemeFromString(lexTypeUnknown, "l", 4),
+				textlexer.NewLexemeFromString(lexTypeUnknown, "o", 5),
+				textlexer.NewLexemeFromString(lexTypeUnknown, `\`, 6),
+			},
+		},
+		{
+			name:  "No escape character configured",
+			input: `"test\"still in string"`,
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule(lexTypeString, rules.Delimited(`"`, `"`, 0)) // No escaping
+				lx.MustAddRule(lexTypeIdentifier, rules.Identifier())
+				lx.MustAddRule(lexTypeWhitespace, rules.Whitespace)
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString(lexTypeString, `"test\"`, 0),
+				textlexer.NewLexemeFromString(lexTypeIdentifier, "still", 7),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, " ", 12),
+				textlexer.NewLexemeFromString(lexTypeIdentifier, "in", 13),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, " ", 15),
+				textlexer.NewLexemeFromString(lexTypeIdentifier, "string", 16),
+				textlexer.NewLexemeFromString(lexTypeUnknown, `"`, 22), // The leftover quote is UNKNOWN
+			},
+		},
 	}
 
 	for _, tc := range testCases {
@@ -671,7 +697,6 @@ func TestDelimitedRule(t *testing.T) {
 
 func TestSignedIntegerRule(t *testing.T) {
 	const lexTypeSignedInt = textlexer.LexemeType("SIGNED_INT")
-	const lexTypeSymbol = textlexer.LexemeType("SYMBOL")
 
 	testCases := []struct {
 		name            string
@@ -725,11 +750,11 @@ func TestSignedIntegerRule(t *testing.T) {
 			setupRules: func(lx *textlexer.TextLexer) {
 				lx.MustAddRule(lexTypeSignedInt, rules.SignedInteger())
 				lx.MustAddRule(lexTypeSymbol, rules.Literal("-"))
-				lx.MustAddRule("ID", rules.Identifier())
+				lx.MustAddRule(lexTypeIdentifier, rules.Identifier())
 			},
 			expectedLexemes: []*textlexer.Lexeme{
 				textlexer.NewLexemeFromString(lexTypeSymbol, "-", 0),
-				textlexer.NewLexemeFromString("ID", "a", 1),
+				textlexer.NewLexemeFromString(lexTypeIdentifier, "a", 1),
 			},
 		},
 		{
@@ -765,9 +790,6 @@ func TestSignedIntegerRule(t *testing.T) {
 }
 
 func TestUnsignedFloatRule(t *testing.T) {
-	const lexTypeFloat = textlexer.LexemeType("FLOAT")
-	const lexTypeInt = textlexer.LexemeType("INT")
-
 	testCases := []struct {
 		name            string
 		input           string
@@ -777,6 +799,9 @@ func TestUnsignedFloatRule(t *testing.T) {
 		{
 			name:  "Integer and Fractional Parts",
 			input: "12.12",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule(lexTypeFloat, rules.UnsignedFloat())
+			},
 			expectedLexemes: []*textlexer.Lexeme{
 				textlexer.NewLexemeFromString(lexTypeFloat, "12.12", 0),
 			},
@@ -784,6 +809,9 @@ func TestUnsignedFloatRule(t *testing.T) {
 		{
 			name:  "Integer Part Only",
 			input: "12.",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule(lexTypeFloat, rules.UnsignedFloat())
+			},
 			expectedLexemes: []*textlexer.Lexeme{
 				textlexer.NewLexemeFromString(lexTypeFloat, "12.", 0),
 			},
@@ -791,6 +819,9 @@ func TestUnsignedFloatRule(t *testing.T) {
 		{
 			name:  "Fractional Part Only",
 			input: ".12",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule(lexTypeFloat, rules.UnsignedFloat())
+			},
 			expectedLexemes: []*textlexer.Lexeme{
 				textlexer.NewLexemeFromString(lexTypeFloat, ".12", 0),
 			},
@@ -798,6 +829,9 @@ func TestUnsignedFloatRule(t *testing.T) {
 		{
 			name:  "Zero Point Zero",
 			input: "0.0",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule(lexTypeFloat, rules.UnsignedFloat())
+			},
 			expectedLexemes: []*textlexer.Lexeme{
 				textlexer.NewLexemeFromString(lexTypeFloat, "0.0", 0),
 			},
@@ -805,6 +839,9 @@ func TestUnsignedFloatRule(t *testing.T) {
 		{
 			name:  "Zero with trailing decimal",
 			input: "0.",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule(lexTypeFloat, rules.UnsignedFloat())
+			},
 			expectedLexemes: []*textlexer.Lexeme{
 				textlexer.NewLexemeFromString(lexTypeFloat, "0.", 0),
 			},
@@ -814,7 +851,7 @@ func TestUnsignedFloatRule(t *testing.T) {
 			input: "123.456",
 			setupRules: func(lx *textlexer.TextLexer) {
 				lx.MustAddRule(lexTypeFloat, rules.UnsignedFloat())
-				lx.MustAddRule(lexTypeInt, rules.UnsignedInteger)
+				lx.MustAddRule(lexTypeInteger, rules.UnsignedInteger)
 			},
 			expectedLexemes: []*textlexer.Lexeme{
 				textlexer.NewLexemeFromString(lexTypeFloat, "123.456", 0),
@@ -823,6 +860,9 @@ func TestUnsignedFloatRule(t *testing.T) {
 		{
 			name:  "Standalone Decimal is not a float",
 			input: ".",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule(lexTypeFloat, rules.UnsignedFloat())
+			},
 			expectedLexemes: []*textlexer.Lexeme{
 				textlexer.NewLexemeFromString(lexTypeUnknown, ".", 0),
 			},
@@ -832,10 +872,10 @@ func TestUnsignedFloatRule(t *testing.T) {
 			input: "123",
 			setupRules: func(lx *textlexer.TextLexer) {
 				lx.MustAddRule(lexTypeFloat, rules.UnsignedFloat())
-				lx.MustAddRule(lexTypeInt, rules.UnsignedInteger)
+				lx.MustAddRule(lexTypeInteger, rules.UnsignedInteger)
 			},
 			expectedLexemes: []*textlexer.Lexeme{
-				textlexer.NewLexemeFromString(lexTypeInt, "123", 0),
+				textlexer.NewLexemeFromString(lexTypeInteger, "123", 0),
 			},
 		},
 	}
@@ -843,11 +883,6 @@ func TestUnsignedFloatRule(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			lx := textlexer.New(strings.NewReader(tc.input))
-			if tc.setupRules == nil {
-				tc.setupRules = func(lx *textlexer.TextLexer) {
-					lx.MustAddRule(lexTypeFloat, rules.UnsignedFloat())
-				}
-			}
 			tc.setupRules(lx)
 
 			var foundLexemes []*textlexer.Lexeme
@@ -865,9 +900,6 @@ func TestUnsignedFloatRule(t *testing.T) {
 }
 
 func TestSignedFloatRule(t *testing.T) {
-	const lexTypeFloat = textlexer.LexemeType("FLOAT")
-	const lexTypeSymbol = textlexer.LexemeType("SYMBOL")
-
 	testCases := []struct {
 		name            string
 		input           string
@@ -877,6 +909,9 @@ func TestSignedFloatRule(t *testing.T) {
 		{
 			name:  "Negative with integer and fractional",
 			input: "-12.22",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule(lexTypeFloat, rules.SignedFloat())
+			},
 			expectedLexemes: []*textlexer.Lexeme{
 				textlexer.NewLexemeFromString(lexTypeFloat, "-12.22", 0),
 			},
@@ -884,6 +919,9 @@ func TestSignedFloatRule(t *testing.T) {
 		{
 			name:  "Negative with trailing decimal",
 			input: "-12.",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule(lexTypeFloat, rules.SignedFloat())
+			},
 			expectedLexemes: []*textlexer.Lexeme{
 				textlexer.NewLexemeFromString(lexTypeFloat, "-12.", 0),
 			},
@@ -891,6 +929,9 @@ func TestSignedFloatRule(t *testing.T) {
 		{
 			name:  "Negative with leading decimal",
 			input: "-.1",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule(lexTypeFloat, rules.SignedFloat())
+			},
 			expectedLexemes: []*textlexer.Lexeme{
 				textlexer.NewLexemeFromString(lexTypeFloat, "-.1", 0),
 			},
@@ -898,6 +939,9 @@ func TestSignedFloatRule(t *testing.T) {
 		{
 			name:  "Negative Zero with trailing decimal",
 			input: "-0.",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule(lexTypeFloat, rules.SignedFloat())
+			},
 			expectedLexemes: []*textlexer.Lexeme{
 				textlexer.NewLexemeFromString(lexTypeFloat, "-0.", 0),
 			},
@@ -905,6 +949,9 @@ func TestSignedFloatRule(t *testing.T) {
 		{
 			name:  "Positive with trailing decimal",
 			input: "+12.",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule(lexTypeFloat, rules.SignedFloat())
+			},
 			expectedLexemes: []*textlexer.Lexeme{
 				textlexer.NewLexemeFromString(lexTypeFloat, "+12.", 0),
 			},
@@ -912,6 +959,9 @@ func TestSignedFloatRule(t *testing.T) {
 		{
 			name:  "Unsigned float is also matched",
 			input: ".1",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule(lexTypeFloat, rules.SignedFloat())
+			},
 			expectedLexemes: []*textlexer.Lexeme{
 				textlexer.NewLexemeFromString(lexTypeFloat, ".1", 0),
 			},
@@ -933,11 +983,11 @@ func TestSignedFloatRule(t *testing.T) {
 			setupRules: func(lx *textlexer.TextLexer) {
 				lx.MustAddRule(lexTypeFloat, rules.SignedFloat())
 				lx.MustAddRule(lexTypeSymbol, rules.Literal("+"))
-				lx.MustAddRule("ID", rules.Identifier())
+				lx.MustAddRule(lexTypeIdentifier, rules.Identifier())
 			},
 			expectedLexemes: []*textlexer.Lexeme{
 				textlexer.NewLexemeFromString(lexTypeSymbol, "+", 0),
-				textlexer.NewLexemeFromString("ID", "a", 1),
+				textlexer.NewLexemeFromString(lexTypeIdentifier, "a", 1),
 			},
 		},
 	}
@@ -945,11 +995,6 @@ func TestSignedFloatRule(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			lx := textlexer.New(strings.NewReader(tc.input))
-			if tc.setupRules == nil {
-				tc.setupRules = func(lx *textlexer.TextLexer) {
-					lx.MustAddRule(lexTypeFloat, rules.SignedFloat())
-				}
-			}
 			tc.setupRules(lx)
 
 			var foundLexemes []*textlexer.Lexeme
@@ -967,10 +1012,7 @@ func TestSignedFloatRule(t *testing.T) {
 }
 
 func TestChoiceAndHexadecimalRule(t *testing.T) {
-	const (
-		lexTypeHex = textlexer.LexemeType("HEX")
-		lexTypeInt = textlexer.LexemeType("INT")
-	)
+	const lexTypeHex = textlexer.LexemeType("HEX")
 
 	testCases := []struct {
 		name            string
@@ -1003,11 +1045,11 @@ func TestChoiceAndHexadecimalRule(t *testing.T) {
 			input: "0xabc 0XDEF",
 			setupRules: func(lx *textlexer.TextLexer) {
 				lx.MustAddRule(lexTypeHex, rules.Hexadecimal())
-				lx.MustAddRule("WS", rules.Whitespace)
+				lx.MustAddRule(lexTypeWhitespace, rules.Whitespace)
 			},
 			expectedLexemes: []*textlexer.Lexeme{
 				textlexer.NewLexemeFromString(lexTypeHex, "0xabc", 0),
-				textlexer.NewLexemeFromString("WS", " ", 5),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, " ", 5),
 				textlexer.NewLexemeFromString(lexTypeHex, "0XDEF", 6),
 			},
 		},
@@ -1016,12 +1058,12 @@ func TestChoiceAndHexadecimalRule(t *testing.T) {
 			input: "0zFFF",
 			setupRules: func(lx *textlexer.TextLexer) {
 				lx.MustAddRule(lexTypeHex, rules.Hexadecimal())
-				lx.MustAddRule(lexTypeInt, rules.UnsignedInteger) // Fallback for the '0'
-				lx.MustAddRule("ID", rules.Identifier())
+				lx.MustAddRule(lexTypeInteger, rules.UnsignedInteger) // Fallback for the '0'
+				lx.MustAddRule(lexTypeIdentifier, rules.Identifier())
 			},
 			expectedLexemes: []*textlexer.Lexeme{
-				textlexer.NewLexemeFromString(lexTypeInt, "0", 0),
-				textlexer.NewLexemeFromString("ID", "zFFF", 1),
+				textlexer.NewLexemeFromString(lexTypeInteger, "0", 0),
+				textlexer.NewLexemeFromString(lexTypeIdentifier, "zFFF", 1),
 			},
 		},
 		{
@@ -1029,10 +1071,10 @@ func TestChoiceAndHexadecimalRule(t *testing.T) {
 			input: "0",
 			setupRules: func(lx *textlexer.TextLexer) {
 				lx.MustAddRule(lexTypeHex, rules.Hexadecimal())
-				lx.MustAddRule(lexTypeInt, rules.UnsignedInteger) // Fallback for the '0'
+				lx.MustAddRule(lexTypeInteger, rules.UnsignedInteger) // Fallback for the '0'
 			},
 			expectedLexemes: []*textlexer.Lexeme{
-				textlexer.NewLexemeFromString(lexTypeInt, "0", 0),
+				textlexer.NewLexemeFromString(lexTypeInteger, "0", 0),
 			},
 		},
 	}
@@ -1057,12 +1099,8 @@ func TestChoiceAndHexadecimalRule(t *testing.T) {
 }
 
 func TestChoiceRule_ComparisonOperators(t *testing.T) {
-	const (
-		lexTypeComparisonOp = textlexer.LexemeType("COMPARISON_OP")
-		lexTypeAssign       = textlexer.LexemeType("ASSIGN") // For fallback testing
-		lexTypeIdentifier   = textlexer.LexemeType("IDENTIFIER")
-		lexTypeWhitespace   = textlexer.LexemeType("WHITESPACE")
-	)
+	// For fallback testing
+	const lexTypeAssign = textlexer.LexemeType("ASSIGN")
 
 	comparisonOperatorRule := rules.Choice(
 		rules.Literal("=="),
@@ -1194,15 +1232,7 @@ func TestChoiceRule_ComparisonOperators(t *testing.T) {
 }
 
 func TestLookahead(t *testing.T) {
-	const (
-		lexTypeKeyword     = textlexer.LexemeType("KEYWORD")
-		lexTypeIdentifier  = textlexer.LexemeType("IDENTIFIER")
-		lexTypeWhitespace  = textlexer.LexemeType("WHITESPACE")
-		lexTypeInteger     = textlexer.LexemeType("INTEGER")
-		lexTypeCSSValue    = textlexer.LexemeType("CSS_VALUE")
-		lexTypeVersionPart = textlexer.LexemeType("VERSION_PART")
-		lexTypeDot         = textlexer.LexemeType("DOT")
-	)
+	const lexTypeDot = textlexer.LexemeType("DOT")
 
 	testCases := []struct {
 		name            string
@@ -1556,6 +1586,20 @@ func TestLookahead(t *testing.T) {
 				textlexer.NewLexemeFromString(lexTypeIdentifier, "ab", 0),
 			},
 		},
+		{
+			name:  "Main rule accepts, lookahead needs more input but gets EOF",
+			input: "123",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule("NUM_THEN_WORD", rules.Lookahead(
+					rules.UnsignedInteger,
+					rules.Word, // Needs letters, but finds EOF
+				))
+				lx.MustAddRule(lexTypeInteger, rules.UnsignedInteger)
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString(lexTypeInteger, "123", 0),
+			},
+		},
 	}
 
 	for _, tc := range testCases {
@@ -1578,29 +1622,24 @@ func TestLookahead(t *testing.T) {
 }
 
 func TestSequenceRule(t *testing.T) {
-	const (
-		lexTypeSequence   = textlexer.LexemeType("SEQUENCE")
-		lexTypeIdentifier = textlexer.LexemeType("IDENTIFIER")
-		lexTypeWhitespace = textlexer.LexemeType("WHITESPACE")
-		lexTypeAB         = textlexer.LexemeType("AB")
-		lexTypeInt        = textlexer.LexemeType("INT")
-		lexTypeUnknown    = lexTypeUnknown
-	)
+	const lexTypeSequence = textlexer.LexemeType("SEQUENCE")
+	const lexTypeAB = textlexer.LexemeType("AB")
 
 	testCases := []struct {
 		name            string
 		input           string
-		rule            textlexer.Rule
-		setupExtraRules func(lx *textlexer.TextLexer)
+		setupRules      func(lx *textlexer.TextLexer)
 		expectedLexemes []*textlexer.Lexeme
 	}{
 		{
 			name:  "Simple sequence of two literals",
 			input: "ab",
-			rule: rules.Sequence(
-				rules.Literal("a"),
-				rules.Literal("b"),
-			),
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule(lexTypeSequence, rules.Sequence(
+					rules.Literal("a"),
+					rules.Literal("b"),
+				))
+			},
 			expectedLexemes: []*textlexer.Lexeme{
 				textlexer.NewLexemeFromString(lexTypeSequence, "ab", 0),
 			},
@@ -1608,11 +1647,11 @@ func TestSequenceRule(t *testing.T) {
 		{
 			name:  "Sequence fails on second element",
 			input: "ac",
-			rule: rules.Sequence(
-				rules.Literal("a"),
-				rules.Literal("b"),
-			),
-			setupExtraRules: func(lx *textlexer.TextLexer) {
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule(lexTypeSequence, rules.Sequence(
+					rules.Literal("a"),
+					rules.Literal("b"),
+				))
 				lx.MustAddRule("A", rules.Literal("a"))
 				lx.MustAddRule("C", rules.Literal("c"))
 			},
@@ -1624,11 +1663,13 @@ func TestSequenceRule(t *testing.T) {
 		{
 			name:  "Sequence with multi-character sub-rules",
 			input: "if cond",
-			rule: rules.Sequence(
-				rules.Literal("if"),
-				rules.Whitespace,
-				rules.Identifier(),
-			),
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule(lexTypeSequence, rules.Sequence(
+					rules.Literal("if"),
+					rules.Whitespace,
+					rules.Identifier(),
+				))
+			},
 			expectedLexemes: []*textlexer.Lexeme{
 				textlexer.NewLexemeFromString(lexTypeSequence, "if cond", 0),
 			},
@@ -1636,10 +1677,12 @@ func TestSequenceRule(t *testing.T) {
 		{
 			name:  "Sequence where first rule pushes back",
 			input: "123x",
-			rule: rules.Sequence(
-				rules.UnsignedInteger,
-				rules.Literal("x"),
-			),
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule(lexTypeSequence, rules.Sequence(
+					rules.UnsignedInteger,
+					rules.Literal("x"),
+				))
+			},
 			expectedLexemes: []*textlexer.Lexeme{
 				textlexer.NewLexemeFromString(lexTypeSequence, "123x", 0),
 			},
@@ -1647,13 +1690,15 @@ func TestSequenceRule(t *testing.T) {
 		{
 			name:  "Sequence where a middle rule pushes back",
 			input: "let 123 go",
-			rule: rules.Sequence(
-				rules.Literal("let"),
-				rules.Whitespace,
-				rules.UnsignedInteger,
-				rules.Whitespace,
-				rules.Literal("go"),
-			),
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule(lexTypeSequence, rules.Sequence(
+					rules.Literal("let"),
+					rules.Whitespace,
+					rules.UnsignedInteger,
+					rules.Whitespace,
+					rules.Literal("go"),
+				))
+			},
 			expectedLexemes: []*textlexer.Lexeme{
 				textlexer.NewLexemeFromString(lexTypeSequence, "let 123 go", 0),
 			},
@@ -1661,13 +1706,15 @@ func TestSequenceRule(t *testing.T) {
 		{
 			name:  "Nested sequence",
 			input: "abc",
-			rule: rules.Sequence(
-				rules.Sequence(
-					rules.Literal("a"),
-					rules.Literal("b"),
-				),
-				rules.Literal("c"),
-			),
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule(lexTypeSequence, rules.Sequence(
+					rules.Sequence(
+						rules.Literal("a"),
+						rules.Literal("b"),
+					),
+					rules.Literal("c"),
+				))
+			},
 			expectedLexemes: []*textlexer.Lexeme{
 				textlexer.NewLexemeFromString(lexTypeSequence, "abc", 0),
 			},
@@ -1675,10 +1722,12 @@ func TestSequenceRule(t *testing.T) {
 		{
 			name:  "Sequence with choice - first choice",
 			input: "ab",
-			rule: rules.Sequence(
-				rules.Literal("a"),
-				rules.Choice(rules.Literal("b"), rules.Literal("c")),
-			),
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule(lexTypeSequence, rules.Sequence(
+					rules.Literal("a"),
+					rules.Choice(rules.Literal("b"), rules.Literal("c")),
+				))
+			},
 			expectedLexemes: []*textlexer.Lexeme{
 				textlexer.NewLexemeFromString(lexTypeSequence, "ab", 0),
 			},
@@ -1686,10 +1735,12 @@ func TestSequenceRule(t *testing.T) {
 		{
 			name:  "Sequence with choice - second choice",
 			input: "ac",
-			rule: rules.Sequence(
-				rules.Literal("a"),
-				rules.Choice(rules.Literal("b"), rules.Literal("c")),
-			),
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule(lexTypeSequence, rules.Sequence(
+					rules.Literal("a"),
+					rules.Choice(rules.Literal("b"), rules.Literal("c")),
+				))
+			},
 			expectedLexemes: []*textlexer.Lexeme{
 				textlexer.NewLexemeFromString(lexTypeSequence, "ac", 0),
 			},
@@ -1697,12 +1748,12 @@ func TestSequenceRule(t *testing.T) {
 		{
 			name:  "Sequence fails on last element with fallback",
 			input: "abx",
-			rule: rules.Sequence(
-				rules.Literal("a"),
-				rules.Literal("b"),
-				rules.Literal("c"),
-			),
-			setupExtraRules: func(lx *textlexer.TextLexer) {
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule(lexTypeSequence, rules.Sequence(
+					rules.Literal("a"),
+					rules.Literal("b"),
+					rules.Literal("c"),
+				))
 				lx.MustAddRule(lexTypeAB, rules.Literal("ab"))
 			},
 			expectedLexemes: []*textlexer.Lexeme{
@@ -1713,8 +1764,8 @@ func TestSequenceRule(t *testing.T) {
 		{
 			name:  "EOF in middle of sequence with fallback",
 			input: "ab",
-			rule:  rules.Sequence(rules.Literal("a"), rules.Literal("b"), rules.Literal("c")),
-			setupExtraRules: func(lx *textlexer.TextLexer) {
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule(lexTypeSequence, rules.Sequence(rules.Literal("a"), rules.Literal("b"), rules.Literal("c")))
 				lx.MustAddRule(lexTypeAB, rules.Literal("ab"))
 			},
 			expectedLexemes: []*textlexer.Lexeme{
@@ -1723,19 +1774,10 @@ func TestSequenceRule(t *testing.T) {
 		},
 	}
 
-	t.Run("Panics on empty sequence", func(t *testing.T) {
-		assert.Panics(t, func() {
-			rules.Sequence()
-		}, "Sequence with no rules should panic")
-	})
-
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			lx := textlexer.New(strings.NewReader(tc.input))
-			lx.MustAddRule(lexTypeSequence, tc.rule)
-			if tc.setupExtraRules != nil {
-				tc.setupExtraRules(lx)
-			}
+			tc.setupRules(lx)
 
 			var foundLexemes []*textlexer.Lexeme
 			for {
@@ -1752,30 +1794,237 @@ func TestSequenceRule(t *testing.T) {
 	}
 }
 
-// assertLexemesEqual compares a slice of expected lexemes with a slice of
-// actual lexemes.
-func assertLexemesEqual(t *testing.T, expected []*textlexer.Lexeme, actual []*textlexer.Lexeme) {
-	areLengthsEqual := assert.Equal(t, len(expected), len(actual), "Number of lexemes mismatch")
-	if !areLengthsEqual {
-		spew.Dump(map[string][]*textlexer.Lexeme{
-			"expected": expected,
-			"actual":   actual,
+func TestUntilEOF(t *testing.T) {
+	const lexTypeRest = textlexer.LexemeType("REST")
+
+	testCases := []struct {
+		name            string
+		input           string
+		expectedLexemes []*textlexer.Lexeme
+	}{
+		{
+			name:  "Consume everything",
+			input: "hello world 123 \n\t another line",
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString(lexTypeRest, "hello world 123 \n\t another line", 0),
+			},
+		},
+		{
+			name:            "Empty input",
+			input:           "",
+			expectedLexemes: nil,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			lx := textlexer.New(strings.NewReader(tc.input))
+			lx.MustAddRule(lexTypeRest, rules.UntilEOF())
+
+			var foundLexemes []*textlexer.Lexeme
+			for {
+				lex, err := lx.Next()
+				if err == io.EOF {
+					break
+				}
+				require.NoError(t, err)
+				foundLexemes = append(foundLexemes, lex)
+			}
+			assertLexemesEqual(t, tc.expectedLexemes, foundLexemes)
 		})
+	}
+}
+
+func TestUntilEOL(t *testing.T) {
+	testCases := []struct {
+		name            string
+		input           string
+		setupRules      func(lx *textlexer.TextLexer)
+		expectedLexemes []*textlexer.Lexeme
+	}{
+		{
+			name:  "Line comment with LF",
+			input: "// comment\ncode",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule(lexTypeComment, rules.Sequence(
+					rules.Literal("//"),
+					rules.UntilEOL(),
+				))
+				lx.MustAddRule(lexTypeWhitespace, rules.Whitespace)
+				lx.MustAddRule(lexTypeIdentifier, rules.Identifier())
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString(lexTypeComment, "// comment", 0),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, "\n", 10),
+				textlexer.NewLexemeFromString(lexTypeIdentifier, "code", 11),
+			},
+		},
+		{
+			name:  "Line comment with CRLF",
+			input: "// comment\r\ncode",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule(lexTypeComment, rules.Sequence(
+					rules.Literal("//"),
+					rules.UntilEOL(),
+				))
+				lx.MustAddRule(lexTypeWhitespace, rules.Whitespace)
+				lx.MustAddRule(lexTypeIdentifier, rules.Identifier())
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString(lexTypeComment, "// comment", 0),
+				textlexer.NewLexemeFromString(lexTypeWhitespace, "\r\n", 10),
+				textlexer.NewLexemeFromString(lexTypeIdentifier, "code", 12),
+			},
+		},
+		{
+			name:  "Line comment at EOF",
+			input: "// comment",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule(lexTypeComment, rules.Sequence(
+					rules.Literal("//"),
+					rules.UntilEOL(),
+				))
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString(lexTypeComment, "// comment", 0),
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			lx := textlexer.New(strings.NewReader(tc.input))
+			tc.setupRules(lx)
+
+			var foundLexemes []*textlexer.Lexeme
+			for {
+				lex, err := lx.Next()
+				if err == io.EOF {
+					break
+				}
+				require.NoError(t, err)
+				foundLexemes = append(foundLexemes, lex)
+			}
+			assertLexemesEqual(t, tc.expectedLexemes, foundLexemes)
+		})
+	}
+}
+
+func TestExcept(t *testing.T) {
+	testCases := []struct {
+		name            string
+		input           string
+		setupRules      func(lx *textlexer.TextLexer)
+		expectedLexemes []*textlexer.Lexeme
+	}{
+		{
+			name:  "Single exclusion",
+			input: "abc",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule("NOT_B", rules.Except('b'))
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString("NOT_B", "a", 0),
+				textlexer.NewLexemeFromString(lexTypeUnknown, "b", 1),
+				textlexer.NewLexemeFromString("NOT_B", "c", 2),
+			},
+		},
+		{
+			name:  "Multiple exclusions",
+			input: "abcdef",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule("NOT_BD", rules.Except('b', 'd'))
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString("NOT_BD", "a", 0),
+				textlexer.NewLexemeFromString(lexTypeUnknown, "b", 1),
+				textlexer.NewLexemeFromString("NOT_BD", "c", 2),
+				textlexer.NewLexemeFromString(lexTypeUnknown, "d", 3),
+				textlexer.NewLexemeFromString("NOT_BD", "e", 4),
+				textlexer.NewLexemeFromString("NOT_BD", "f", 5),
+			},
+		},
+		{
+			name:  "No exclusions match",
+			input: "xyz",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule("NOT_AB", rules.Except('a', 'b'))
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString("NOT_AB", "x", 0),
+				textlexer.NewLexemeFromString("NOT_AB", "y", 1),
+				textlexer.NewLexemeFromString("NOT_AB", "z", 2),
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			lx := textlexer.New(strings.NewReader(tc.input))
+			tc.setupRules(lx)
+
+			var foundLexemes []*textlexer.Lexeme
+			for {
+				lex, err := lx.Next()
+				if err == io.EOF {
+					break
+				}
+				require.NoError(t, err)
+				foundLexemes = append(foundLexemes, lex)
+			}
+			assertLexemesEqual(t, tc.expectedLexemes, foundLexemes)
+		})
+	}
+}
+
+func TestPanicConditions(t *testing.T) {
+	t.Run("Literal with empty string panics", func(t *testing.T) {
+		assert.Panics(t, func() { rules.Literal("") })
+	})
+
+	t.Run("Delimited with empty start panics", func(t *testing.T) {
+		assert.Panics(t, func() { rules.Delimited("", ")", 0) })
+	})
+
+	t.Run("Delimited with empty end panics", func(t *testing.T) {
+		assert.Panics(t, func() { rules.Delimited("(", "", 0) })
+	})
+
+	t.Run("Sequence with no rules panics", func(t *testing.T) {
+		assert.Panics(t, func() { rules.Sequence() })
+	})
+
+	t.Run("Choice with no rules panics", func(t *testing.T) {
+		assert.Panics(t, func() { rules.Choice() })
+	})
+}
+
+// assertLexemesEqual compares a slice of expected lexemes with a slice of
+// actual lexemes, providing detailed output on mismatch.
+func assertLexemesEqual(t *testing.T, expected []*textlexer.Lexeme, actual []*textlexer.Lexeme) {
+	t.Helper()
+
+	if !assert.Equal(t, len(expected), len(actual), "Number of lexemes mismatch") {
+		t.Logf("Expected %d lexemes, but got %d.", len(expected), len(actual))
+		spew.Dump(map[string]interface{}{"expected": expected, "actual": actual})
+		// Stop test on length mismatch as further checks are pointless
+		t.FailNow()
 	}
 
 	for i := range expected {
-		assertLexemeEqual(t, expected[i], actual[i])
+		assertLexemeEqual(t, i, expected[i], actual[i])
 	}
 }
 
 // assertLexemeEqual compares a single expected lexeme with a single actual
 // lexeme.
-func assertLexemeEqual(t *testing.T, expected *textlexer.Lexeme, actual *textlexer.Lexeme) {
-	require.NotNil(t, actual, "Actual lexeme should not be nil")
-	require.NotNil(t, expected, "Expected lexeme should not be nil")
+func assertLexemeEqual(t *testing.T, index int, expected *textlexer.Lexeme, actual *textlexer.Lexeme) {
+	t.Helper()
+	require.NotNil(t, actual, "Actual lexeme at index %d should not be nil", index)
+	require.NotNil(t, expected, "Expected lexeme at index %d should not be nil", index)
 
-	assert.Equal(t, expected.Type(), actual.Type(), "Lexeme type mismatch")
-	assert.Equal(t, expected.Text(), actual.Text(), "Lexeme text mismatch")
-	assert.Equal(t, expected.Offset(), actual.Offset(), "Lexeme offset mismatch")
-	assert.Equal(t, expected.Len(), actual.Len(), "Lexeme length mismatch")
+	assert.Equal(t, expected.Type(), actual.Type(), "Lexeme type mismatch at index %d", index)
+	assert.Equal(t, expected.Text(), actual.Text(), "Lexeme text mismatch at index %d", index)
+	assert.Equal(t, expected.Offset(), actual.Offset(), "Lexeme offset mismatch at index %d", index)
+	assert.Equal(t, expected.Len(), actual.Len(), "Lexeme length mismatch at index %d", index)
 }

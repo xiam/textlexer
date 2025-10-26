@@ -96,10 +96,10 @@ func Except(runes ...rune) textlexer.Rule {
 func UntilEOL() textlexer.Rule {
 	return newCharacterClassMatcher(
 		func(r rune) bool {
-			return r == '\n' || r == '\r'
+			return r != '\n' && r != '\r'
 		},
 		0,
-		1,
+		-1,
 	)
 }
 
