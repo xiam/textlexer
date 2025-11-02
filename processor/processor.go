@@ -143,6 +143,7 @@ func exec(
 		if start > math.MaxUint64-(offset+1) {
 			return start, offset, ErrStartOverflow
 		}
+
 		return start + offset + 1, 0, nil
 
 	case StateReject:
@@ -150,6 +151,16 @@ func exec(
 		// Position after: start + 0 (ready to try different rules)
 
 		return start, 0, nil
+
+	case StateMatch:
+		// Match the current position without consuming. Used for zero-length matches.
+		// New token starts at: start + offset, offset resets to 0
+
+		if start > math.MaxUint64-offset {
+			return start, offset, ErrStartOverflow
+		}
+
+		return start + offset, 0, nil
 	}
 
 	panic("unreachable: unknown state")

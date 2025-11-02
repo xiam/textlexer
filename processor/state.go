@@ -35,6 +35,12 @@ const (
 	// Operation: offset = offset - 1
 	// Position after: start + (offset-1)
 	StatePushBack
+
+	// StateMatch matches the current position without consuming input.
+	// Used for zero-length matches (e.g., EOF, anchors).
+	// Operation: start = start + offset, offset = 0
+	// Position after: (start + offset) + 0
+	StateMatch
 )
 
 // stateNames maps State values to their human-readable string representations.
@@ -43,6 +49,7 @@ var stateNames = map[State]string{
 	StateAccept:   "ACCEPT",
 	StateReject:   "REJECT",
 	StatePushBack: "PUSHBACK",
+	StateMatch:    "MATCH",
 }
 
 // String returns the string representation of the State.

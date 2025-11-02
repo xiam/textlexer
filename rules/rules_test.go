@@ -1977,6 +1977,475 @@ func TestExcept(t *testing.T) {
 	}
 }
 
+func TestOptionalRule(t *testing.T) {
+	const (
+		lexTypeSign = textlexer.LexemeType("SIGN")
+	)
+
+	testCases := []struct {
+		name            string
+		input           string
+		setupRules      func(lx *textlexer.TextLexer)
+		expectedLexemes []*textlexer.Lexeme
+	}{
+		{
+			name:  "Optional match present",
+			input: "-",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule(lexTypeSign, rules.Optional(rules.Literal("-")))
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString(lexTypeSign, "-", 0),
+			},
+		},
+		{
+			name:  "Optional match absent",
+			input: "x",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule(lexTypeSign, rules.Optional(
+					rules.Literal("-"),
+				))
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString(lexTypeSign, "", 0),
+				textlexer.NewLexemeFromString(lexTypeUnknown, "x", 0),
+			},
+		},
+		{
+			name:  "Optional match absent multiple times",
+			input: "abcd",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule(lexTypeSign, rules.Optional(
+					rules.Literal("-"),
+				))
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString(lexTypeSign, "", 0),
+				textlexer.NewLexemeFromString(lexTypeUnknown, "a", 0),
+
+				textlexer.NewLexemeFromString(lexTypeSign, "", 1),
+				textlexer.NewLexemeFromString(lexTypeUnknown, "b", 1),
+
+				textlexer.NewLexemeFromString(lexTypeSign, "", 2),
+				textlexer.NewLexemeFromString(lexTypeUnknown, "c", 2),
+
+				textlexer.NewLexemeFromString(lexTypeSign, "", 3),
+				textlexer.NewLexemeFromString(lexTypeUnknown, "d", 3),
+			},
+		},
+		{
+			name:  "Optional with choice present",
+			input: "+",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule(lexTypeSign, rules.Optional(rules.Choice(
+					rules.Literal("+"),
+					rules.Literal("-"),
+				)))
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString(lexTypeSign, "+", 0),
+			},
+		},
+		{
+			name:  "Optional with multiple characters",
+			input: "http://example.com",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule("PROTOCOL", rules.Optional(
+					rules.Literal("http://"),
+					/*rules.Sequence(
+						rules.Literal("http"),
+						rules.Literal("://"),
+					),*/ // TODO: support sequences in Optional
+				))
+				lx.MustAddRule(lexTypeIdentifier, rules.Identifier())
+				lx.MustAddRule("DOT", rules.Literal("."))
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString("PROTOCOL", "http://", 0),
+				textlexer.NewLexemeFromString(lexTypeIdentifier, "example", 7),
+				textlexer.NewLexemeFromString("DOT", ".", 14),
+				textlexer.NewLexemeFromString(lexTypeIdentifier, "com", 15),
+			},
+		},
+		{
+			name:  "Optional absent with following tokens",
+			input: "example.com",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule("PROTOCOL", rules.Optional(
+					rules.Literal("http://"),
+				))
+				lx.MustAddRule(lexTypeIdentifier, rules.Identifier())
+				lx.MustAddRule("DOT", rules.Literal("."))
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString(lexTypeIdentifier, "example", 0),
+				textlexer.NewLexemeFromString("DOT", ".", 7),
+				textlexer.NewLexemeFromString(lexTypeIdentifier, "com", 8),
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			lx := textlexer.New(strings.NewReader(tc.input))
+			tc.setupRules(lx)
+
+			var foundLexemes []*textlexer.Lexeme
+			for {
+				lex, err := lx.Next()
+				if err == io.EOF {
+					break
+				}
+				require.NoError(t, err, "Lexer returned an unexpected error")
+				foundLexemes = append(foundLexemes, lex)
+			}
+
+			assertLexemesEqual(t, tc.expectedLexemes, foundLexemes)
+
+			_, err := lx.Next()
+			require.Equal(t, io.EOF, err, "Expected EOF after consuming all tokens")
+		})
+	}
+}
+
+/*
+func TestZeroOrMoreRule(t *testing.T) {
+	const (
+		lexTypeNumber    = textlexer.LexemeType("NUMBER")
+		lexTypeListItems = textlexer.LexemeType("LIST_ITEMS")
+	)
+
+	testCases := []struct {
+		name            string
+		input           string
+		setupRules      func(lx *textlexer.TextLexer)
+		expectedLexemes []*textlexer.Lexeme
+	}{
+		{
+			name:  "Zero matches (empty)",
+			input: "x",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule("PATTERN", rules.Sequence(
+					rules.ZeroOrMore(rules.Literal("a")),
+					rules.Literal("x"),
+				))
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString("PATTERN", "x", 0),
+			},
+		},
+		{
+			name:  "One match",
+			input: "ax",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule("PATTERN", rules.Sequence(
+					rules.ZeroOrMore(rules.Literal("a")),
+					rules.Literal("x"),
+				))
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString("PATTERN", "ax", 0),
+			},
+		},
+		{
+			name:  "Multiple matches",
+			input: "aaaaax",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule("PATTERN", rules.Sequence(
+					rules.ZeroOrMore(rules.Literal("a")),
+					rules.Literal("x"),
+				))
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString("PATTERN", "aaaaax", 0),
+			},
+		},
+		{
+			name:  "Zero or more whitespace",
+			input: "   word",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule("SPACED_WORD", rules.Sequence(
+					rules.ZeroOrMore(rules.Whitespace),
+					rules.Identifier(),
+				))
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString("SPACED_WORD", "   word", 0),
+			},
+		},
+		{
+			name:  "Zero or more whitespace with no leading space",
+			input: "word",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule("SPACED_WORD", rules.Sequence(
+					rules.ZeroOrMore(rules.Whitespace),
+					rules.Identifier(),
+				))
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString("SPACED_WORD", "word", 0),
+			},
+		},
+		{
+			name:  "Zero or more digits (re-implementing optional fractional part)",
+			input: "3.14159",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule(lexTypeNumber, rules.Sequence(
+					rules.UnsignedInteger,
+					rules.Optional(rules.Sequence(
+						rules.Literal("."),
+						rules.ZeroOrMore(rules.UnsignedInteger),
+					)),
+				))
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString(lexTypeNumber, "3.14159", 0),
+			},
+		},
+		{
+			name:  "Greedy matching - consumes all possible matches",
+			input: "aaab",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule("GREEDY", rules.Sequence(
+					rules.ZeroOrMore(rules.Literal("a")),
+					rules.Literal("a"), // This should fail because ZeroOrMore consumed all 'a's
+				))
+				lx.MustAddRule("FALLBACK", rules.Sequence(
+					rules.ZeroOrMore(rules.Literal("a")),
+					rules.Literal("b"),
+				))
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString("FALLBACK", "aaab", 0),
+			},
+		},
+		{
+			name:  "Zero or more complex rules",
+			input: "123,456,789,end",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule(lexTypeListItems, rules.Sequence(
+					rules.UnsignedInteger,
+					rules.ZeroOrMore(rules.Sequence(
+						rules.Literal(","),
+						rules.UnsignedInteger,
+					)),
+					rules.Literal(","),
+					rules.Identifier(),
+				))
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString(lexTypeListItems, "123,456,789,end", 0),
+			},
+		},
+		{
+			name:  "Zero or more with empty match",
+			input: "start,end",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule("LIST", rules.Sequence(
+					rules.Identifier(),
+					rules.ZeroOrMore(rules.Sequence(
+						rules.Literal(","),
+						rules.UnsignedInteger,
+					)),
+					rules.Literal(","),
+					rules.Identifier(),
+				))
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString("LIST", "start,end", 0),
+			},
+		},
+		{
+			name:  "Nested ZeroOrMore",
+			input: "aabbccx",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule("NESTED", rules.Sequence(
+					rules.ZeroOrMore(rules.Choice(
+						rules.Literal("aa"),
+						rules.Literal("bb"),
+						rules.Literal("cc"),
+					)),
+					rules.Literal("x"),
+				))
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString("NESTED", "aabbccx", 0),
+			},
+		},
+		{
+			name:  "ZeroOrMore at EOF (zero matches)",
+			input: "word",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule("WORD_WITH_TRAILING", rules.Sequence(
+					rules.Identifier(),
+					rules.ZeroOrMore(rules.Literal(";")),
+				))
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString("WORD_WITH_TRAILING", "word", 0),
+			},
+		},
+		{
+			name:  "ZeroOrMore at EOF (multiple matches)",
+			input: "word;;;",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule("WORD_WITH_TRAILING", rules.Sequence(
+					rules.Identifier(),
+					rules.ZeroOrMore(rules.Literal(";")),
+				))
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString("WORD_WITH_TRAILING", "word;;;", 0),
+			},
+		},
+		{
+			name:  "Only ZeroOrMore rule (zero matches)",
+			input: "",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule("ONLY_ZERO_OR_MORE", rules.ZeroOrMore(rules.Literal("a")))
+			},
+			expectedLexemes: nil,
+		},
+		{
+			name:  "Only ZeroOrMore rule (multiple matches)",
+			input: "aaaaa",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule("ONLY_ZERO_OR_MORE", rules.ZeroOrMore(rules.Literal("a")))
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString("ONLY_ZERO_OR_MORE", "aaaaa", 0),
+			},
+		},
+		{
+			name:  "ZeroOrMore with backtracking",
+			input: "aaab",
+			setupRules: func(lx *textlexer.TextLexer) {
+				// This tests that ZeroOrMore can backtrack when the next rule fails
+				lx.MustAddRule("BACKTRACK", rules.Sequence(
+					rules.ZeroOrMore(rules.Literal("a")),
+					rules.Literal("ab"),
+				))
+				lx.MustAddRule("FALLBACK", rules.Identifier())
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString("FALLBACK", "aaab", 0),
+			},
+		},
+		{
+			name:  "ZeroOrMore with choice inside",
+			input: "0x1A2B3C",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule("HEX_NUMBER", rules.Sequence(
+					rules.Literal("0x"),
+					rules.ZeroOrMore(rules.Choice(
+						rules.UnsignedInteger,
+						rules.ASCIIWord,
+					)),
+				))
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString("HEX_NUMBER", "0x1A2B3C", 0),
+			},
+		},
+		{
+			name:  "Multiple ZeroOrMore in sequence",
+			input: "aaabbbx",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule("DOUBLE_ZERO_OR_MORE", rules.Sequence(
+					rules.ZeroOrMore(rules.Literal("a")),
+					rules.ZeroOrMore(rules.Literal("b")),
+					rules.Literal("x"),
+				))
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString("DOUBLE_ZERO_OR_MORE", "aaabbbx", 0),
+			},
+		},
+		{
+			name:  "Multiple ZeroOrMore with first empty",
+			input: "bbbx",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule("DOUBLE_ZERO_OR_MORE", rules.Sequence(
+					rules.ZeroOrMore(rules.Literal("a")),
+					rules.ZeroOrMore(rules.Literal("b")),
+					rules.Literal("x"),
+				))
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString("DOUBLE_ZERO_OR_MORE", "bbbx", 0),
+			},
+		},
+		{
+			name:  "Multiple ZeroOrMore with both empty",
+			input: "x",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule("DOUBLE_ZERO_OR_MORE", rules.Sequence(
+					rules.ZeroOrMore(rules.Literal("a")),
+					rules.ZeroOrMore(rules.Literal("b")),
+					rules.Literal("x"),
+				))
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString("DOUBLE_ZERO_OR_MORE", "x", 0),
+			},
+		},
+		{
+			name:  "ZeroOrMore of multi-character literal",
+			input: "hello hello hello world",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule("HELLOS", rules.Sequence(
+					rules.ZeroOrMore(rules.Sequence(
+						rules.Literal("hello"),
+						rules.Whitespace,
+					)),
+					rules.Identifier(),
+				))
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString("HELLOS", "hello hello hello world", 0),
+			},
+		},
+		{
+			name:  "ZeroOrMore stops at first non-match",
+			input: "aaaxaaa",
+			setupRules: func(lx *textlexer.TextLexer) {
+				lx.MustAddRule("FIRST_RUN", rules.Sequence(
+					rules.ZeroOrMore(rules.Literal("a")),
+					rules.Literal("x"),
+				))
+				lx.MustAddRule("SECOND_RUN", rules.ZeroOrMore(rules.Literal("a")))
+			},
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString("FIRST_RUN", "aaax", 0),
+				textlexer.NewLexemeFromString("SECOND_RUN", "aaa", 4),
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			lx := textlexer.New(strings.NewReader(tc.input))
+			tc.setupRules(lx)
+
+			var foundLexemes []*textlexer.Lexeme
+			for {
+				lex, err := lx.Next()
+				if err == io.EOF {
+					break
+				}
+				require.NoError(t, err, "Lexer returned an unexpected error")
+				foundLexemes = append(foundLexemes, lex)
+			}
+
+			assertLexemesEqual(t, tc.expectedLexemes, foundLexemes)
+
+			_, err := lx.Next()
+			require.Equal(t, io.EOF, err, "Expected EOF after consuming all tokens")
+		})
+	}
+}
+*/
+
 func TestPanicConditions(t *testing.T) {
 	t.Run("Literal with empty string panics", func(t *testing.T) {
 		assert.Panics(t, func() { rules.Literal("") })

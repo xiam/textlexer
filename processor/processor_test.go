@@ -108,6 +108,24 @@ func TestExecBoundaryConditions(t *testing.T) {
 			expectedOffset: 0,
 			expectedError:  nil,
 		},
+		{
+			name:           "match at max start",
+			start:          math.MaxUint64,
+			offset:         0,
+			state:          StateMatch,
+			expectedStart:  math.MaxUint64,
+			expectedOffset: 0,
+			expectedError:  nil,
+		},
+		{
+			name:           "match with overflow: start + offset > max",
+			start:          math.MaxUint64 - 5,
+			offset:         6,
+			state:          StateMatch,
+			expectedStart:  math.MaxUint64 - 5,
+			expectedOffset: 6,
+			expectedError:  ErrStartOverflow,
+		},
 	}
 
 	for _, tt := range tests {
@@ -185,6 +203,37 @@ func TestExecBasicSequences(t *testing.T) {
 	})
 }
 
+func TestExecStateMatch(t *testing.T) {
+	t.Run("basic match operation", func(t *testing.T) {
+		// Match at current position (zero-length)
+		start, offset, err := exec(0, 0, StateMatch)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(0), start) // No advancement
+		assert.Equal(t, uint64(0), offset)
+	})
+
+	t.Run("match with offset", func(t *testing.T) {
+		// Match after lookahead
+		start, offset, err := exec(10, 5, StateMatch)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(15), start) // start becomes start + offset
+		assert.Equal(t, uint64(0), offset)
+	})
+
+	t.Run("match vs accept difference", func(t *testing.T) {
+		// Same starting conditions, different results
+		start1, offset1, err1 := exec(10, 5, StateAccept)
+		require.NoError(t, err1)
+		start2, offset2, err2 := exec(10, 5, StateMatch)
+		require.NoError(t, err2)
+
+		assert.Equal(t, uint64(16), start1) // Accept: start + offset + 1
+		assert.Equal(t, uint64(15), start2) // Match: start + offset
+		assert.Equal(t, uint64(0), offset1)
+		assert.Equal(t, uint64(0), offset2)
+	})
+}
+
 func TestExecArithmeticBoundaries(t *testing.T) {
 	t.Run("accept boundary cases", func(t *testing.T) {
 		tests := []struct {
@@ -204,6 +253,30 @@ func TestExecArithmeticBoundaries(t *testing.T) {
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
 				_, _, err := exec(tt.start, tt.offset, StateAccept)
+				if tt.hasErr {
+					assert.ErrorIs(t, err, ErrStartOverflow)
+				} else {
+					assert.NoError(t, err)
+				}
+			})
+		}
+	})
+
+	t.Run("match boundary cases", func(t *testing.T) {
+		tests := []struct {
+			name   string
+			start  uint64
+			offset uint64
+			hasErr bool
+		}{
+			{"safe: 0 + 0", 0, 0, false},
+			{"safe: max-10 + 10", math.MaxUint64 - 10, 10, false},
+			{"overflow: max-10 + 11", math.MaxUint64 - 10, 11, true},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				_, _, err := exec(tt.start, tt.offset, StateMatch)
 				if tt.hasErr {
 					assert.ErrorIs(t, err, ErrStartOverflow)
 				} else {
@@ -241,6 +314,13 @@ func TestExecErrorIdempotency(t *testing.T) {
 			math.MaxUint64,
 			0,
 			StateAccept,
+			ErrStartOverflow,
+		},
+		{
+			"match overflow",
+			math.MaxUint64,
+			1,
+			StateMatch,
 			ErrStartOverflow,
 		},
 	}
@@ -328,6 +408,26 @@ func TestStateProcessor(t *testing.T) {
 		start, offset := processor.Position()
 		assert.Equal(t, uint64(6), start)
 		assert.Equal(t, uint64(0), offset)
+	})
+
+	t.Run("match sequences", func(t *testing.T) {
+		processor := NewStateProcessor()
+
+		// Consume one char
+		processor.Execute(StateContinue)
+		processor.Execute(StateAccept)
+		start, _ := processor.Position()
+		assert.Equal(t, uint64(2), start)
+
+		// Match at current position (zero-length)
+		processor.Execute(StateMatch)
+		start, _ = processor.Position()
+		assert.Equal(t, uint64(2), start) // Start does not advance
+
+		// Match again, should have no effect on position
+		processor.Execute(StateMatch)
+		start, _ = processor.Position()
+		assert.Equal(t, uint64(2), start)
 	})
 }
 

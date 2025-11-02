@@ -1,6 +1,9 @@
 package rules
 
 import (
+	"fmt"
+	"log/slog"
+
 	"github.com/xiam/textlexer"
 	"github.com/xiam/textlexer/processor"
 )
@@ -562,4 +565,171 @@ func Lookahead(
 		processor.NewStateProcessor(),
 		rule,
 	)
+}
+
+// Repeat creates a rule that matches the given rule between min and max times.
+// Use max = -1 for unlimited repetitions.
+//
+// Examples:
+//   - Repeat(rule, 0, 1) matches 0 or 1 times (same as Optional)
+//   - Repeat(rule, 1, -1) matches 1 or more times (same as OneOrMore)
+//   - Repeat(rule, 3, 5) matches between 3 and 5 times
+func Repeat(rule textlexer.Rule, min, max int) textlexer.Rule {
+	// Input validation
+	if min < 0 {
+		panic("Repeat: min cannot be negative")
+	}
+	if max != -1 && max < min {
+		panic("Repeat: max cannot be less than min (use -1 for unlimited)")
+	}
+	if max == 0 {
+		panic("Repeat: max cannot be 0 (use Optional or omit the rule)")
+	}
+	if min == 0 && max == 0 {
+		panic("Repeat: both min and max cannot be 0")
+	}
+
+	type repeatState struct {
+		count int
+		sp    processor.StateProcessor
+
+		currentRule textlexer.Rule
+	}
+
+	var buildRepeatMatcher func(*repeatState) textlexer.Rule
+
+	buildRepeatMatcher = func(state *repeatState) textlexer.Rule {
+		return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+			if state.currentRule == nil {
+				state.currentRule = rule
+			}
+
+			slog.Info(
+				"Repeat: processing symbol.",
+				"symbol", string(s.Rune()),
+				"count", state.count,
+				"min", min,
+				"max", max,
+				"currentRule", state.currentRule != nil,
+			)
+
+			nextRule, matchState := state.currentRule(s)
+
+			err := state.sp.Execute(matchState)
+			if err != nil {
+				panic(fmt.Sprintf("processor: %v", err))
+			}
+
+			slog.Info(
+				"Repeat: sub-rule executed.",
+				"state", matchState,
+				"nextRule", nextRule != nil,
+			)
+
+			state.currentRule = nextRule
+
+			if matchState == textlexer.StateAccept || matchState == textlexer.StateMatch {
+				state.count++ // Increment count on successful match
+			}
+
+			hasMinimum := state.count >= min
+			hasMaximum := max != -1 && state.count >= max
+
+			isAccepted := hasMinimum && (max == -1 || hasMaximum)
+
+			slog.Info(
+				"Repeat: evaluating state.",
+				"symbol", string(s.Rune()),
+				"count", state.count,
+				"matchState", matchState,
+				"hasMinimum", hasMinimum,
+				"hasMaximum", hasMaximum,
+				"isAccepted", isAccepted,
+				"nextRule", nextRule != nil,
+				"sp", state.sp,
+			)
+
+			switch matchState {
+			case textlexer.StateAccept:
+				slog.Info("Repeat: ==> matched")
+				if isAccepted {
+					return nil, textlexer.StateAccept
+				}
+				return buildRepeatMatcher(state), textlexer.StateContinue
+			case textlexer.StateContinue:
+				slog.Info("Repeat: ==> continuing")
+				return buildRepeatMatcher(state), textlexer.StateContinue
+			case textlexer.StateReject:
+				slog.Info("Repeat: ==> rejected")
+				if hasMinimum {
+					// We have enough matches, accept what we have
+					slog.Info("Repeat: match zero")
+					return nil, textlexer.StateMatch
+				}
+				panic("Repeat: not enough matches, rejecting")
+			default:
+				panic(fmt.Sprintf("Repeat: unhandled state %v", matchState))
+			}
+
+			panic(fmt.Sprintf("Repeat: should not reach here, state=%v", matchState))
+		}
+	}
+
+	return buildRepeatMatcher(&repeatState{
+		sp: processor.NewStateProcessor(),
+	})
+}
+
+// Optional creates a rule that matches the given rule zero or one time.
+// Equivalent to the regex ? quantifier.
+//
+// Example: Optional(Literal("-")) matches an optional minus sign.
+func Optional(rule textlexer.Rule) textlexer.Rule {
+	return Repeat(rule, 0, 1)
+}
+
+// ZeroOrMore creates a rule that matches the given rule zero or more times.
+// Equivalent to the regex * quantifier.
+//
+// Example: ZeroOrMore(Whitespace) matches any amount of whitespace, including none.
+func ZeroOrMore(rule textlexer.Rule) textlexer.Rule {
+	return Repeat(rule, 0, -1)
+}
+
+// OneOrMore creates a rule that matches the given rule one or more times.
+// Equivalent to the regex + quantifier.
+//
+// Example: OneOrMore(Digit) matches one or more digits.
+func OneOrMore(rule textlexer.Rule) textlexer.Rule {
+	return Repeat(rule, 1, -1)
+}
+
+// Exactly creates a rule that matches the given rule exactly n times.
+//
+// Example: Exactly(Digit, 4) matches exactly four digits (like a PIN code).
+func Exactly(rule textlexer.Rule, n int) textlexer.Rule {
+	if n < 0 {
+		panic("Exactly: n cannot be negative")
+	}
+	return Repeat(rule, n, n)
+}
+
+// AtLeast creates a rule that matches the given rule at least n times.
+//
+// Example: AtLeast(Digit, 3) matches three or more digits.
+func AtLeast(rule textlexer.Rule, n int) textlexer.Rule {
+	if n < 0 {
+		panic("AtLeast: n cannot be negative")
+	}
+	return Repeat(rule, n, -1)
+}
+
+// AtMost creates a rule that matches the given rule at most n times (including zero).
+//
+// Example: AtMost(Digit, 3) matches zero to three digits.
+func AtMost(rule textlexer.Rule, n int) textlexer.Rule {
+	if n < 0 {
+		panic("AtMost: n cannot be negative")
+	}
+	return Repeat(rule, 0, n)
 }

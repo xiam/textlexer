@@ -27,4 +27,9 @@ const (
 	// stream and continue processing with the next Rule returned by the current
 	// rule. The rule must return a non-nil next Rule.
 	StatePushBack processor.State = processor.StatePushBack
+
+	// StateMatch signals a zero-length match at the current position. The rule
+	// may optionally return a next Rule to continue scanning for further
+	// matches.
+	StateMatch processor.State = processor.StateMatch
 )
