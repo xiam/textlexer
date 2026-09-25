@@ -87,6 +87,63 @@ Found: [WORD] "the"
 Found: [WORD] "world"
 ```
 
+## Layering
+
+`textlexer` owns lexical policy: rule state transitions, parallel rule
+evaluation, maximal-munch selection, registration-order tie breaking, the
+`UNKNOWN` fallback, and lexeme construction. It owns no text-stream mechanics.
+
+Reading, buffering, positions, and replay come from a positioned cursor —
+[`github.com/xiam/textreader`](https://github.com/xiam/textreader). The cursor
+decodes UTF-8, tracks the logical position, retains the input a checkpoint needs,
+and restores a marked position exactly.
+
+`New` accepts the same `io.RuneReader` it always did. A source that also
+implements `io.Reader` is read as a byte stream by the cursor, so no extra UTF-8
+decoder is introduced; a source that only implements `io.RuneReader` is read rune
+by rune. `NewWithCursor` takes an already-built cursor instead.
+
+### Token spans
+
+Every lexeme reports the source span it covers:
+
+```go
+lex, err := lx.Next()
+span := lex.Span()
+
+span.Start().ByteOffset()  // byte offset of the first byte
+span.Start().RuneOffset()  // rune offset of the first rune
+span.Start().Line()        // 1-based line
+span.Start().Column()      // 0-based rune column
+span.End()                 // position just past the token
+span.Bytes()               // width in bytes
+span.Runes()               // width in runes
+```
+
+`lex.ByteOffset()`, `lex.RuneOffset()`, `lex.Line()`, and `lex.Column()` are
+shorthands for the start position. `Offset()` is unchanged and still counts
+runes, so it equals `RuneOffset()`; use `ByteOffset()` when bytes are what you
+need.
+
+Positions come from the committed token, not from where the lexer stopped
+reading: a rule that looks ahead past its match does not shift the next token's
+span.
+
+While a token is being assembled the lexer holds a checkpoint, so
+`WithMaxTokenBytes(n)` bounds how many source bytes one token may retain. A token
+that exceeds the bound fails with an error wrapping
+`textreader.ErrRetentionExceeded` instead of growing without limit, and the
+cursor is rewound to the token start, so a failed `Next` consumes nothing. The
+default is unbounded.
+
+`lexer.Context(lex, before, after)` returns the source text around a lexeme,
+including the input that precedes it. The lexer keeps a window of the most
+recent lexemes retained, so the context stays available while `lex` is inside
+that window, and `before` is clamped to it. A `Next` that commits nothing — one
+that fails, or the final EOF probe — releases nothing. Once later tokens push
+`lex` out of the window, its retained input is released and calls return
+`textreader.ErrPositionOutOfBuffer`.
+
 ## Installation
 
 ```sh
