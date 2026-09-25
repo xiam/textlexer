@@ -14,6 +14,10 @@ const (
 type Symbol struct {
 	r     rune
 	flags uint
+
+	// size is the number of bytes the rune occupies in the source text. It is
+	// zero for a symbol built with NewSymbol.
+	size int
 }
 
 // NewSymbol creates a new Symbol with the specified rune and position flags.
@@ -23,6 +27,12 @@ func NewSymbol(r rune, flags uint) Symbol {
 		r:     r,
 		flags: flags,
 	}
+}
+
+// Size returns the number of bytes the symbol occupies in the source text. A
+// Symbol built with NewSymbol reports zero.
+func (s Symbol) Size() int {
+	return s.size
 }
 
 // IsEOF returns true if this symbol is at the end of the input stream.

@@ -29,7 +29,7 @@ name: publish-policy-gate
 
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, edited]
 
 # Read-only: the gate reads PR metadata and reports its own check status;
 # it never writes contents, PRs, issues, or anything else.
@@ -76,7 +76,13 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          SYNC_BOT_LOGIN: ${{ vars.GITHUB_SYNC_BOT_LOGIN }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          # Repository (Actions) variable naming the publisher's login, e.g.
+          # `xiam-publisher[bot]`. It must NOT start with `GITHUB_` — GitHub
+          # reserves that prefix for its own variables and refuses to create
+          # such a repository variable (HTTP 422), which left the gate
+          # unconfigurable and failing closed on every PR (ci-cd#280).
+          SYNC_BOT_LOGIN: ${{ vars.PUBLISH_POLICY_BOT_LOGIN }}
         run: |
           python3 .github/publish-policy/policy_gate.py \
             --policy publish-policy.json \
@@ -84,4 +90,5 @@ jobs:
             --pr "$PR_NUMBER" \
             --pr-author "$PR_AUTHOR" \
             --pr-head-ref "$PR_HEAD_REF" \
+            --base-ref "$PR_BASE_REF" \
             --sync-bot-login "$SYNC_BOT_LOGIN"

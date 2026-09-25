@@ -876,7 +876,7 @@ func TestLexerProcessor(t *testing.T) {
 				foundLexemes = append(foundLexemes, lex)
 			}
 
-			ok := assert.Equal(t, tc.expectedLexemes, foundLexemes, "The stream of lexemes did not match the expected output.")
+			ok := assert.Equal(t, lexemeKeys(tc.expectedLexemes), lexemeKeys(foundLexemes), "The stream of lexemes did not match the expected output.")
 			if !ok {
 				for i, lex := range foundLexemes {
 					t.Logf("\tFound[%d]\tText=%q, Type=%q, Offset=%d", i, lex.Text(), lex.Type(), lex.Offset())
@@ -1396,7 +1396,7 @@ func TestLexerPathologicalRuleWithDeepBacktracking(t *testing.T) {
 				found = append(found, lex)
 			}
 
-			assert.Equal(t, tc.expected, found, "Backtrack depth %d failed", tc.backtrackDepth)
+			assert.Equal(t, lexemeKeys(tc.expected), lexemeKeys(found), "Backtrack depth %d failed", tc.backtrackDepth)
 		})
 	}
 }
@@ -1426,7 +1426,7 @@ func TestLexerWithInputContainingRuneEOF(t *testing.T) {
 		found = append(found, lex)
 	}
 
-	assert.Equal(t, expected, found)
+	assert.Equal(t, lexemeKeys(expected), lexemeKeys(found))
 }
 
 // TestLexerWithManyRules is a stress test for a large number of rules.
@@ -1649,7 +1649,7 @@ func TestLexerPathologicalRules(t *testing.T) {
 			require.NoError(t, err)
 			found = append(found, lex)
 		}
-		assert.Equal(t, expected, found)
+		assert.Equal(t, lexemeKeys(expected), lexemeKeys(found))
 	})
 
 	t.Run("Bait and Switch Rule", func(t *testing.T) {
@@ -1720,7 +1720,7 @@ func TestLexerPathologicalRules(t *testing.T) {
 			require.NoError(t, err)
 			found = append(found, lex)
 		}
-		assert.Equal(t, expected, found)
+		assert.Equal(t, lexemeKeys(expected), lexemeKeys(found))
 	})
 
 	t.Run("Rule Rejects After Full Buffer Consumption (Veto Rule)", func(t *testing.T) {
@@ -1781,7 +1781,7 @@ func TestLexerPathologicalRules(t *testing.T) {
 			require.NoError(t, err)
 			found = append(found, lex)
 		}
-		assert.Equal(t, expected, found)
+		assert.Equal(t, lexemeKeys(expected), lexemeKeys(found))
 	})
 
 	t.Run("Rule Returns nil with StatePushBack", func(t *testing.T) {
@@ -1819,7 +1819,7 @@ func TestLexerPathologicalRules(t *testing.T) {
 			require.NoError(t, err)
 			found = append(found, lex)
 		}
-		assert.Equal(t, expected, found)
+		assert.Equal(t, lexemeKeys(expected), lexemeKeys(found))
 	})
 
 	t.Run("Always Reject Rule", func(t *testing.T) {
@@ -1848,7 +1848,7 @@ func TestLexerPathologicalRules(t *testing.T) {
 			require.NoError(t, err)
 			found = append(found, lex)
 		}
-		assert.Equal(t, expected, found)
+		assert.Equal(t, lexemeKeys(expected), lexemeKeys(found))
 	})
 
 	t.Run("Always Accept Rule", func(t *testing.T) {
@@ -1877,7 +1877,7 @@ func TestLexerPathologicalRules(t *testing.T) {
 			require.NoError(t, err)
 			found = append(found, lex)
 		}
-		assert.Equal(t, expected, found)
+		assert.Equal(t, lexemeKeys(expected), lexemeKeys(found))
 	})
 
 	t.Run("Exponential State Explosion", func(t *testing.T) {
@@ -1997,7 +1997,7 @@ func TestLexerPathologicalRules(t *testing.T) {
 			require.NoError(t, err)
 			found = append(found, lex)
 		}
-		assert.Equal(t, expected, found)
+		assert.Equal(t, lexemeKeys(expected), lexemeKeys(found))
 	})
 
 	t.Run("Buffer Overflow Attempt", func(t *testing.T) {
