@@ -1,29 +1,60 @@
 # textlexer
 
-`textlexer` is a simple tool for reading text and identifying and labeling its
-different parts, like a smart highlighter.
+`textlexer` is a toolkit for building lexers in Go. You describe the lexical
+rules for a text — what a keyword is, what a word is, what a number is, where a
+comment starts and ends — and the engine scans your text and hands you back a
+stream of **lexemes**: the matched content, a label you assigned, and the exact
+source position (byte and rune offset, line and column) of each piece.
 
-Imagine you have a block of text, like a command or a log entry. You want to
-break it down into meaningful pieces: this is a command, this is a number, this
-is a word, etc. `textlexer` lets you define simple rules for what each piece
-looks like, and it will scan your text and hand you back the labeled pieces one
-by one.
+What you do with the lexemes is up to you. `textlexer` tokenizes; it does not
+parse. Grammar validation, AST construction, and interpretation belong to you,
+the consumer. The same engine is intended to serve many different lexers — a
+highlighter, a SQL tokenizer, a log parser — each defined by its own rules.
 
-### How It Works
+The canonical prose specification — the contract for what the engine does today,
+what it is intended to become, and what is still an open design question — lives
+in [docs/specs/core-contract.md](docs/specs/core-contract.md). This README
+presents the capabilities and limitations and a runnable example; the spec is
+the reference for exact behavior.
 
-1.  **You Define the Rules:** You tell the tool what you're looking for. For
-    example, a "KEYWORD" is the exact word `say`, and a "WORD" is any sequence
-    of letters.
-2.  **It Finds the Longest Match:** If one rule could match "send" and another
-    could match "send_message", the tool is smart enough to choose the longer
-    one ("send_message").
-3.  **It Returns Labeled Pieces:** The tool gives you a stream of the pieces it
-    found, each with the label (e.g., "KEYWORD") and the text (e.g., "say")
-    that it matched.
+## Capabilities today
+
+- **Rules you write in Go.** A rule is a state-transition function, so any
+  matching logic expressible in Go is expressible as a rule: literals,
+  character predicates, Unicode-aware matching, and positional decisions
+  (beginning of line, end of line, end of input) via the symbol's flags.
+- **Longest match, with deterministic tie breaking.** If two rules both match,
+  the longer match wins; if they match the same length, the rule registered
+  first wins.
+- **Full source positions.** Every lexeme carries a half-open span with byte
+  offset, rune offset, 1-based line, and 0-based rune column at both ends.
+- **Safe to drive concurrently.** Multiple goroutines can call `Next()` on one
+  lexer; the token stream stays deterministic and complete.
+- **Bounded memory.** An optional per-token byte bound caps how much source a
+  single in-flight token may retain, and a diagnostic `Context` accessor reads
+  the text around a recent lexeme.
+
+## Limitations today
+
+- **No rule builders yet.** Rules are hand-written Go functions. Reusable,
+  composable building blocks — literal and predicate combinators, Unicode
+  categories, sequence/alternation/repetition, named rules, lexical modes, and
+  post-match actions — are intended capabilities, not shipped APIs. The spec
+  records them at the semantic level; nothing here is available today.
+- **One flat label.** A lexeme carries a single string-valued type. There is no
+  kind/metadata API yet; expressing a broad category plus a specific kind is an
+  intended capability with an open design question.
+- **No parsing.** The output is a stream of descriptive lexemes, nothing more.
+  Anything structural is the consumer's job.
+
+**Future work.** On top of the current engine: the reusable rule tools above,
+and eventually declarative frontends (for example, a schema- or table-driven
+way of declaring rules) that compile down to the same engine. These are
+direction, not commitments — the spec marks each as intended or open.
 
 ## Example
 
-Let's find all the keywords and words in the phrase "say hello to the world".
+Find all the keywords and words in the phrase "say hello to the world".
 
 Here is a snippet showing the core logic.
 
@@ -152,4 +183,4 @@ go get github.com/xiam/textlexer
 
 ## License
 
-MIT License. See the [LICENSE.md](LICENSE) file for details.
+MIT License. See the [LICENSE.md](LICENSE.md) file for details.
