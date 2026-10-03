@@ -78,7 +78,10 @@ classification and a span. See [Lexer/consumer boundary](#lexerconsumer-boundary
   checkpoints, and replay. The lexer owns no text-stream mechanics.
   **Current contract** (package doc, `textlexer.go`).
 - **Checkpoint** — a marked logical position on the cursor that the engine uses
-  to rewind a token that is abandoned. **Current contract** (`textlexer.go`).
+  to rewind a token that is abandoned. The engine reuses a fixed pool of
+  checkpoint slots (the context window plus the in-flight token) when the
+  cursor can re-arm a released checkpoint, instead of allocating one per token.
+  **Current contract** (`textlexer.go`).
 - **Context window** — a fixed-size ring of the most recent committed lexemes
   (three today) whose retained input the engine keeps so `Context` can read the
   text around one of them. **Current contract** (`textlexer.go`, `markWindow`).
@@ -279,12 +282,34 @@ text around* a lexeme lives only as long as the window retains it. A consumer
 that needs surrounding text for a lexeme much later must have captured it with
 `Context` while the lexeme was still in the window.
 
+**Mark ownership.** The engine keeps a fixed pool of checkpoint slots — one per
+lexeme the window retains, plus the token currently being assembled — rather
+than allocating a fresh checkpoint for every token. When the cursor can re-arm
+a released checkpoint (the `Remark` capability shipped in `textreader`), a
+committed token's slot is released and the next token re-arms that same slot in
+place, so the number of live checkpoints is bounded by the window and
+steady-state tokenization allocates no checkpoint. A failed `Next` and the EOF
+probe reset and release only their own in-flight slot, so earlier committed
+context is left intact and a mark is never re-armed while it is still active. A
+cursor that does not expose the capability (see `NewWithCursor`) keeps the
+older behavior of allocating a checkpoint per token. The window's width,
+eviction order, and every behavioral promise above are unchanged by the reuse.
+
 **Evidence.** `TestLexerContext` (a lexeme stays readable across one more token,
 then falls out and returns `ErrPositionOutOfBuffer`);
 `TestLexerContextReachesPrecedingLexemes` (`before` reaches back across preceding
 lexemes and clamps rather than errors when asked for more than is retained);
 `TestLexerContextSurvivesFailedNext` and `TestLexerContextSurvivesEOFProbe`
-(a non-committing call releases nothing).
+(a non-committing call releases nothing);
+`TestLexerMarkReuseLongSequence` (a long stream lexes under a tight finite
+retention budget, so no mark is leaked and registrations stay bounded);
+`TestLexerMarkEvictionExact` (exactly the three most recent lexemes remain
+readable, every earlier one is evicted, and the retained region is the window);
+`TestLexerMarkReuseAfterFailures` (repeated failed `Next` calls commit nothing
+and the prior context survives, then the stream lexes on);
+`TestLexerMarkReuseAfterRelease` (`Release` drops the window and later tokens
+re-arm it); `TestLexerMarkFallbackWithoutRemark` (an injected cursor without the
+capability lexes identically but still allocates a checkpoint per token).
 
 ### Unmatched input, EOF, and errors
 

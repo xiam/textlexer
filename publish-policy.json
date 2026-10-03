@@ -1,8 +1,12 @@
 {
-  "blocked_paths": [],
+  "blocked_paths": [
+    ".gitattributes",
+    "/internal-docs",
+    "/internal-docs/**"
+  ],
   "published_branches": [
     "master"
   ],
   "schema_version": 2,
-  "source_hash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  "source_hash": "sha256:e9fd833ec03cfcece106469f515f6a464ef7d0953a07e04caa46ad48287d1353"
 }

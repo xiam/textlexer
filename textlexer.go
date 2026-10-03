@@ -22,6 +22,15 @@
 // sits at the end of the winning match. Token positions come from that
 // committed range — the checkpoint's position and the cursor after the step
 // back — never from where speculation stopped.
+//
+// The lexer keeps a fixed pool of checkpoint slots — one per lexeme the context
+// window retains, plus the in-flight token. When the cursor can re-arm a
+// released checkpoint (the Remark capability of textreader's TextReader), a
+// committed token's slot is re-armed in place for the next token, so
+// steady-state tokenization allocates no checkpoint. A cursor that cannot
+// re-arm one (see NewWithCursor) falls back to allocating a checkpoint per
+// token. The context window, eviction order, and returned-error rollback are
+// unchanged by the reuse.
 package textlexer
 
 import (
@@ -61,6 +70,17 @@ type contextualCursor interface {
 	Context(s textreader.Span, before, after int) (string, error)
 }
 
+// remarkableCursor is implemented by cursors that can re-arm a released
+// checkpoint in place instead of allocating a new one. It backs the
+// allocation-free mark reuse: a lexer holding a fixed set of mark slots arms
+// each slot once with Checkpoint and then re-arms the same values, so the
+// allocation cost is bounded by the number of slots rather than the number of
+// tokens. It is optional, following contextualCursor: a cursor without it
+// keeps the existing allocating behavior.
+type remarkableCursor interface {
+	Remark(*textreader.Checkpoint) error
+}
+
 // Option configures a lexer created by New.
 type Option func(*config)
 
@@ -90,6 +110,13 @@ func WithMaxTokenBytes(n int) Option {
 // could never return anything.
 const markWindow = 3
 
+// markSlots is the total number of reusable checkpoint slots the lexer keeps:
+// the markWindow committed lexemes plus the one token being assembled. It is a
+// fixed bound, so a cursor with the Remark capability re-arms the same values
+// in place and the checkpoint allocation cost is bounded by markSlots rather
+// than growing with the number of tokens.
+const markSlots = markWindow + 1
+
 // TextLexer orchestrates the tokenization of an input stream according to a
 // set of user-defined rules. It reads through a positioned cursor and runs the
 // rule processing engine over the located runes it reads.
@@ -104,13 +131,22 @@ type TextLexer struct {
 	// emitted counts the runes committed since the start of the stream.
 	emitted int
 
-	// marks keeps the committed bytes of the most recently returned lexemes
-	// retained, so Context can read the text around one of them — including the
-	// input that precedes it. It is a ring of markWindow entries; a mark is
-	// released only when a later token commits and overwrites its slot, so a
-	// failed Next or an EOF probe leaves the previous lexeme's context readable.
-	marks     [markWindow]*textreader.Checkpoint
+	// marks holds the reusable checkpoint slots: the markWindow committed
+	// lexemes plus the one token being assembled. A cursor with the Remark
+	// capability re-arms the same values in place, so the checkpoint allocation
+	// cost is bounded by markSlots rather than the number of tokens; a cursor
+	// without it allocates a fresh checkpoint per token and the slots hold those
+	// values until a later token evicts them. marksNext is the in-flight slot:
+	// the token currently being assembled is armed there. A mark is released
+	// only when a later token commits and evicts its slot, so a failed Next or
+	// an EOF probe leaves the previous lexeme's context readable.
+	marks     [markSlots]*textreader.Checkpoint
 	marksNext int
+
+	// canRemark reports whether the cursor can re-arm a released checkpoint in
+	// place (the Remark capability). It is set once in NewWithCursor, because
+	// the cursor is fixed for the life of the lexer.
+	canRemark bool
 
 	// maxTokenBytes is the per-token byte bound passed to WithMaxTokenBytes, or
 	// zero for unbounded. It is enforced by the lexer here rather than delegated
@@ -170,13 +206,17 @@ func NewWithOptions(rr io.RuneReader, opts ...Option) *TextLexer {
 // already owns. Use it to share one cursor between several consumers, or to
 // configure the cursor's retention policy directly.
 func NewWithCursor(c Cursor) *TextLexer {
-	return &TextLexer{
+	lx := &TextLexer{
 		cursor:    c,
 		runes:     make([]Symbol, 0, 256),
 		rules:     []LexemeType{},
 		rulesMap:  map[LexemeType]Rule{},
 		processor: nil,
 	}
+	if _, ok := c.(remarkableCursor); ok {
+		lx.canRemark = true
+	}
+	return lx
 }
 
 func newConfig(opts []Option) *config {
@@ -355,16 +395,46 @@ func symbolFlags(at textreader.Pos, r rune, eof bool) uint {
 	return flags
 }
 
+// remarkSlot arms the reusable checkpoint in slot idx at the cursor's current
+// position and returns it. It is the allocation-free half of the mark lifecycle:
+// a cursor with the Remark capability re-arms the slot's released value in place
+// (Remark never allocates), so after the first pass over the ring the checkpoint
+// cost is bounded by markSlots. A nil slot — the first time a slot is armed —
+// and a cursor without the capability allocate a fresh Checkpoint and store it
+// in the slot, preserving the existing allocating behavior.
+//
+// The caller must pass the in-flight slot (marksNext): a slot is re-armed only
+// when it is released, which is exactly the state of the in-flight slot when the
+// previous token that used it has committed. A Remark that is somehow refused
+// (an active value, which the invariant above rules out) falls back to a fresh
+// Checkpoint and replaces the slot's stale value, so the token still arms a
+// valid mark.
+func (lx *TextLexer) remarkSlot(idx int) *textreader.Checkpoint {
+	if lx.canRemark {
+		if c := lx.marks[idx]; c != nil {
+			if err := lx.cursor.(remarkableCursor).Remark(c); err == nil {
+				return c
+			}
+			// Remark refused: fall through to a fresh checkpoint and replace
+			// the slot's value below.
+		}
+	}
+
+	c := lx.cursor.Checkpoint()
+	lx.marks[idx] = c
+	return c
+}
+
 func (lx *TextLexer) nextLexeme() (*Lexeme, error) {
 	processor, err := lx.getProcessor()
 	if err != nil {
 		return nil, fmt.Errorf("processor: %w", err)
 	}
 
-	// Mark the start of the token: the cursor retains every byte from here until
-	// the token is committed, which is what makes the rewind below exact and
-	// what WithMaxTokenBytes bounds.
-	mark := lx.cursor.Checkpoint()
+	// Mark the start of the token in the in-flight slot: the cursor retains every
+	// byte from here until the token is committed, which is what makes the
+	// rewind below exact and what WithMaxTokenBytes bounds.
+	mark := lx.remarkSlot(lx.marksNext)
 
 	symbols := lx.runes[:0]
 	tokenBytes := 0
@@ -452,14 +522,16 @@ func (lx *TextLexer) nextLexeme() (*Lexeme, error) {
 
 		span := textreader.NewSpan(start, end)
 
-		// The token is committed: keep its checkpoint so Context can read around it,
-		// and release only the one whose slot it takes — a mark is never released
-		// by a call that did not commit a token.
-		if old := lx.marks[lx.marksNext]; old != nil {
+		// The token is committed: its in-flight slot now holds a committed mark
+		// (remarkSlot stored or re-armed it there), and the oldest committed
+		// mark — the slot immediately ahead in the ring — is displaced. It is
+		// released, but its value stays in the slot to be re-armed in place on
+		// the next pass, so the reuse path allocates no checkpoint. A mark is
+		// never released by a call that did not commit a token.
+		if old := lx.marks[(lx.marksNext+1)%markSlots]; old != nil {
 			_ = old.Release()
 		}
-		lx.marks[lx.marksNext] = mark
-		lx.marksNext = (lx.marksNext + 1) % markWindow
+		lx.marksNext = (lx.marksNext + 1) % markSlots
 
 		lx.emitted += len(winner)
 		lx.runes = symbols
