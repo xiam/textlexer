@@ -32,7 +32,11 @@ the reference for exact behavior.
   lexer; the token stream stays deterministic and complete.
 - **Bounded memory.** An optional per-token byte bound caps how much source a
   single in-flight token may retain, and a diagnostic `Context` accessor reads
-  the text around a recent lexeme.
+  the text around a recent lexeme. The lexer reuses a fixed pool of checkpoint
+  slots — one per retained lexeme plus the token in flight — so steady-state
+  tokenization stops allocating checkpoints: each committed token re-arms the
+  slot its predecessor just vacated. Cursors that cannot re-arm a checkpoint
+  (see `NewWithCursor`) keep the older, per-token allocation behavior.
 
 ## Limitations today
 
@@ -174,6 +178,16 @@ that window, and `before` is clamped to it. A `Next` that commits nothing — on
 that fails, or the final EOF probe — releases nothing. Once later tokens push
 `lex` out of the window, its retained input is released and calls return
 `textreader.ErrPositionOutOfBuffer`.
+
+The retained window is backed by a fixed pool of checkpoint slots (the window
+width plus the in-flight token). When the cursor supports checkpoint re-arming,
+a committed token's slot is released and the next token re-arms that same slot
+in place, so the number of live checkpoints is bounded by the window and no
+checkpoint is allocated once the pool is full. `NewWithCursor` accepts any
+cursor that implements the four-method `Cursor` interface; a cursor that also
+exposes `Remark` (as `textreader.NewReader` does) opts into the reuse path,
+while a cursor without it falls back to allocating a fresh checkpoint per
+token.
 
 ## Installation
 
