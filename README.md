@@ -42,9 +42,16 @@ the reference for exact behavior.
 
 - **No rule builders yet.** Rules are hand-written Go functions. Reusable,
   composable building blocks — literal and predicate combinators, Unicode
-  categories, sequence/alternation/repetition, named rules, lexical modes, and
-  post-match actions — are intended capabilities, not shipped APIs. The spec
-  records them at the semantic level; nothing here is available today.
+  categories, sequence/alternation/repetition, and named rules — are intended
+  capabilities, not shipped APIs. The spec records them at the semantic level;
+  nothing here is available today.
+- **No lexical modes or post-match actions in the engine, by design.** The
+  engine is a stateless stack machine that only reports matches (see the
+  [VM design principles](docs/specs/core-contract.md#vm-design-principles)).
+  Lexical modes and post-match actions are intended capabilities of a layer
+  above `Next()`, not of the engine. Modes already work that way today: run one
+  lexer per mode over a shared cursor (`NewWithCursor`), and call `Release`
+  before handing the cursor to the next mode's lexer.
 - **One flat label.** A lexeme carries a single string-valued type. There is no
   kind/metadata API yet; expressing a broad category plus a specific kind is an
   intended capability with an open design question.
@@ -127,6 +134,9 @@ Found: [WORD] "world"
 `textlexer` owns lexical policy: rule state transitions, parallel rule
 evaluation, maximal-munch selection, registration-order tie breaking, the
 `UNKNOWN` fallback, and lexeme construction. It owns no text-stream mechanics.
+It applies the transitions a rule returns but keeps no state on a rule's
+behalf, and it only reports what matched; see the
+[VM design principles](docs/specs/core-contract.md#vm-design-principles).
 
 Reading, buffering, positions, and replay come from a positioned cursor —
 [`github.com/xiam/textreader`](https://github.com/xiam/textreader). The cursor

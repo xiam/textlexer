@@ -32,13 +32,14 @@
 // Common Patterns and Helpers:
 // - `matchString(s)`: Creates a rule that matches an exact string.
 // - `matchAnyOf(ss...)`: Creates a composite rule that matches any of the provided strings.
-// - `backtrack(n, state)`: Simulates n pushbacks before returning the given state.
+// - `excludeLast(n, state)`: The verdict that excludes the last n symbols with n pushbacks,
+//   then ends the chain with the given state.
 // - Table-driven tests in `TestLexerProcessor` for basic functionality.
 // - Adversarial sub-tests in `TestLexerPathologicalRules`.
 //
 // Known Constraints:
 // - Each `LexemeType` can only have one rule associated with it.
-// - Rules must handle EOF gracefully (no inconclusive states).
+// - A rule that is still active at EOF is retired; only its recorded accepts count.
 // - The lexer uses longest-match semantics with rule priority as a tiebreaker.
 //
 // Guideline for Adding New Tests:
@@ -62,7 +63,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -70,14 +70,58 @@ import (
 	"github.com/xiam/textlexer"
 )
 
-// backtrack is a test stub that simulates a real backtrack function for state signaling.
-func backtrack(n int, s textlexer.State) textlexer.Rule {
+// excludeLast returns the verdict of a rule that excludes the last n symbols
+// (n >= 1) from its match and then ends the pushback chain with (nil, s). It
+// issues n StatePushBack verdicts in total: the returned one, and n-1 more from
+// the Rule it returns. The first pushback removes the symbol that was just read
+// (at end of input, the EOF symbol). See "Rule states and pushback" in
+// docs/specs/core-contract.md.
+func excludeLast(n int, s textlexer.State) (textlexer.Rule, textlexer.State) {
+	if n < 1 {
+		panic("excludeLast: n must be at least 1")
+	}
+	return pushBackChain(n-1, s), textlexer.StatePushBack
+}
+
+// pushBackChain returns a Rule that issues n more StatePushBack verdicts and
+// then returns (nil, s). Entered through one StatePushBack, it excludes n+1
+// symbols; excludeLast states the total count directly.
+func pushBackChain(n int, s textlexer.State) textlexer.Rule {
 	return func(sym textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 		if n > 0 {
-			return backtrack(n-1, s), textlexer.StatePushBack
+			return pushBackChain(n-1, s), textlexer.StatePushBack
 		}
 		return nil, s
 	}
+}
+
+// boundedRule wraps r so that the test fails once r, and every Rule reached
+// from it, has been invoked more than budget times in total. It bounds a test
+// by work instead of by wall-clock time: a lexer that stops terminating keeps
+// invoking its rules, and the invocation that exceeds the budget fails the test.
+//
+// The wrapped rule runs inside Next, so the test must call Next on the test
+// goroutine; t.Fatalf is then legal there. callRule recovers panics but not
+// runtime.Goexit, so the failure stops the test instead of retiring the rule.
+// A defect that loops without invoking any rule is not caught here; go test
+// -timeout remains the backstop for it.
+func boundedRule(t testing.TB, budget int, r textlexer.Rule) textlexer.Rule {
+	calls := 0
+	var wrap func(textlexer.Rule) textlexer.Rule
+	wrap = func(r textlexer.Rule) textlexer.Rule {
+		return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+			calls++
+			if calls > budget {
+				t.Fatalf("rule invoked more than %d times: the lexer does not terminate", budget)
+			}
+			next, state := r(s)
+			if next != nil {
+				next = wrap(next)
+			}
+			return next, state
+		}
+	}
+	return wrap(r)
 }
 
 // matchString is a test helper that creates a simple Rule to match an exact string.
@@ -238,17 +282,23 @@ func newIdentifierRule() textlexer.Rule {
 	}
 }
 
+// newUnsignedFloatRule matches "1.5", "1." and ".5". It decides by lookahead: it
+// returns StateContinue until it reads the first symbol that cannot extend the
+// float, then excludes that one symbol (the EOF symbol at end of input) and
+// accepts. It never accepts before that, because a rule's recorded match only
+// grows within a token, so a pushback could not shorten an earlier accept.
 func newUnsignedFloatRule() textlexer.Rule {
 	var start, integerPart, afterInitialRadix, afterIntegerRadix, fractionalPart textlexer.Rule
 
+	// Exclude the symbol just read, which ends the float, and accept the rest.
 	pushBackAndAccept := func(_ textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		return backtrack(1, textlexer.StateAccept), textlexer.StatePushBack
+		return excludeLast(1, textlexer.StateAccept)
 	}
 
 	// State for matching digits after a decimal point.
 	fractionalPart = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 		if isDigit(s) {
-			return fractionalPart, textlexer.StateAccept
+			return fractionalPart, textlexer.StateContinue
 		}
 		return pushBackAndAccept(s)
 	}
@@ -256,7 +306,11 @@ func newUnsignedFloatRule() textlexer.Rule {
 	// State after a radix point that followed an integer part (e.g., after "123.").
 	afterIntegerRadix = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 		if isDigit(s) {
-			return fractionalPart, textlexer.StateAccept
+			return fractionalPart, textlexer.StateContinue
+		}
+		if s.Rune() == '.' {
+			// A second radix point: "1.." starts a range, so "1." is not a float.
+			return nil, textlexer.StateReject
 		}
 		return pushBackAndAccept(s)
 	}
@@ -264,18 +318,19 @@ func newUnsignedFloatRule() textlexer.Rule {
 	// State after a radix point was the *first* character. A fractional part is required.
 	afterInitialRadix = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 		if isDigit(s) {
-			return fractionalPart, textlexer.StateAccept
+			return fractionalPart, textlexer.StateContinue
 		}
 		return nil, textlexer.StateReject
 	}
 
-	// State for matching the initial integer part. This is NOT a float yet.
+	// State for matching the initial integer part. This is NOT a float yet, and
+	// neither is the integer part followed by '.': afterIntegerRadix decides.
 	integerPart = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 		if isDigit(s) {
 			return integerPart, textlexer.StateContinue
 		}
 		if s.Rune() == '.' {
-			return afterIntegerRadix, textlexer.StateAccept
+			return afterIntegerRadix, textlexer.StateContinue
 		}
 		return nil, textlexer.StateReject
 	}
@@ -654,29 +709,38 @@ func TestLexerProcessor(t *testing.T) {
 			expectedError: "rules",
 		},
 		{
-			name:  "Malformed Rule (Infinite Loop)",
+			name:  "Rule Never Settles (UNKNOWN per rune)",
 			input: "aaaa",
 			setupRules: func(lx *textlexer.TextLexer) {
-				// This rule always continues without consuming input, which can cause an infinite loop.
+				// This rule always continues and never accepts, so it is still
+				// active at end of input. The VM retires it after the EOF
+				// symbol; with no recorded accept, each token is one UNKNOWN
+				// rune. Each token reads to the end of input first.
 				var brokenRule textlexer.Rule
 				brokenRule = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 					return brokenRule, textlexer.StateContinue
 				}
 				lx.MustAddRule(lexTypeLoop, brokenRule)
 			},
-			expectedError: "EOF",
+			expectedLexemes: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "a", 0),
+				textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "a", 1),
+				textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "a", 2),
+				textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "a", 3),
+			},
 		},
 		{
 			name:  "Excessive Pushback (Index Out of Bounds)",
 			input: "a",
 			setupRules: func(lx *textlexer.TextLexer) {
-				var pushbackRule textlexer.Rule
-				pushbackRule = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-					return backtrack(2, textlexer.StateAccept), textlexer.StatePushBack
+				// On 'a' the stack holds one symbol, and the rule tries to exclude
+				// three. The second pushback passes the bottom of the stack, so the
+				// VM retires the rule (processor.go:110) and no rule matches.
+				pushbackRule := func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+					return excludeLast(3, textlexer.StateAccept)
 				}
 				lx.MustAddRule(lexTypeLoop, pushbackRule)
 			},
-			// The ruleProcessor should have a safety limit on pushbacks.
 			expectedLexemes: []*textlexer.Lexeme{
 				textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "a", 0),
 			},
@@ -702,8 +766,11 @@ func TestLexerProcessor(t *testing.T) {
 			setupRules: func(lx *textlexer.TextLexer) {
 				// A rule that ACCEPTS a match of length 0 must be handled by the lexer
 				// to prevent an infinite loop. It should advance by 1 rune as an UNKNOWN token.
+				// One pushback on the first symbol excludes it, so the accept has
+				// length 0. TestProcessZeroLengthMatch proves that the VM takes the
+				// zero-length branch (textlexer.go:482-485), not the no-match path.
 				zeroLengthRule := func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-					return backtrack(1, textlexer.StateAccept), textlexer.StatePushBack
+					return excludeLast(1, textlexer.StateAccept)
 				}
 				lx.MustAddRule(lexTypeLoop, zeroLengthRule)
 			},
@@ -774,11 +841,14 @@ func TestLexerProcessor(t *testing.T) {
 			name:  "Pushback at EOF",
 			input: "a",
 			setupRules: func(lx *textlexer.TextLexer) {
+				// The rule continues at 'a' without accepting, so its only accept
+				// comes from the pushback: at end of input the first pushback
+				// removes the EOF symbol, which leaves "a" as the match.
 				pushbackAtEOF := func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 					if s.Rune() == 'a' {
 						return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-							return backtrack(1, textlexer.StateAccept), textlexer.StatePushBack
-						}, textlexer.StateAccept
+							return excludeLast(1, textlexer.StateAccept)
+						}, textlexer.StateContinue
 					}
 					return nil, textlexer.StateReject
 				}
@@ -1120,9 +1190,11 @@ func TestLexerHandlesReaderError(t *testing.T) {
 	assert.Contains(t, err.Error(), "simulated underlying reader error")
 }
 
-// TestLexerPanickingRule demonstrates that a panic within a user-provided rule
-// is correctly propagated.
-func TestLexerPanickingRule(t *testing.T) {
+// TestLexerPanickingRuleIsRecoveredAndRetired: the only rule panics on every
+// symbol. The VM recovers each panic and retires the rule as for StateReject,
+// so no rule matches and each rune is one UNKNOWN lexeme, then io.EOF. The
+// panic never reaches the caller. See KD-2 in docs/specs/core-contract.md.
+func TestLexerPanickingRuleIsRecoveredAndRetired(t *testing.T) {
 	const lexTypePanic = textlexer.LexemeType("PANIC")
 	input := "crash"
 
@@ -1133,13 +1205,14 @@ func TestLexerPanickingRule(t *testing.T) {
 	lx := textlexer.New(strings.NewReader(input))
 	lx.MustAddRule(lexTypePanic, panickingRule)
 
-	assert.PanicsWithValue(t, "user rule panicked", func() {
-		_, _ = lx.Next()
-	})
+	assertRetireStream(t, lx, unknownLexemes(input, 0))
 }
 
-// TestLexerPanicRecovery verifies the lexer's behavior when a rule panics.
-func TestLexerPanicRecovery(t *testing.T) {
+// TestLexerPanicRetiresRuleAndLexingContinues: a rule panics once, on the
+// first symbol of the first token. The VM recovers the panic and retires that
+// rule for the token; the other rules' matches survive, and later tokens are
+// lexed with every rule, the panicking one included.
+func TestLexerPanicRetiresRuleAndLexingContinues(t *testing.T) {
 	const (
 		lexTypePanic  = textlexer.LexemeType("PANIC")
 		lexTypeNormal = textlexer.LexemeType("NORMAL")
@@ -1164,11 +1237,14 @@ func TestLexerPanicRecovery(t *testing.T) {
 	lx.MustAddRule(lexTypeNormal, identifierRule)
 	lx.MustAddRule("WS", whitespaceRule)
 
-	// This test verifies the current behavior, which is to propagate the panic.
-	// The lexer itself does not recover from panics in user-provided rules.
-	assert.Panics(t, func() {
-		_, _ = lx.Next()
+	// In the second token PANIC runs again and accepts "n", but NORMAL's
+	// longer "normal" wins.
+	assertRetireStream(t, lx, []*textlexer.Lexeme{
+		textlexer.NewLexemeFromString(lexTypeNormal, "panic", 0),
+		textlexer.NewLexemeFromString("WS", " ", 5),
+		textlexer.NewLexemeFromString(lexTypeNormal, "normal", 6),
 	})
+	assert.Equal(t, 1, panicCount)
 }
 
 // TestLexerBufferCompaction verifies that the internal buffer compacts after
@@ -1273,9 +1349,14 @@ func TestLexerConcurrentAddRuleAndNext(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		close(lexingStarted)
+		// Signal after the first Next has returned, so that AddRule starts
+		// only once the processor exists. Whether AddRule then overlaps a
+		// later Next is up to the scheduler; -race reports a race either way.
+		signal := sync.OnceFunc(func() { close(lexingStarted) })
+		defer signal()
 		for {
 			_, err := lx.Next()
+			signal()
 			if err == io.EOF {
 				return
 			}
@@ -1294,9 +1375,6 @@ func TestLexerConcurrentAddRuleAndNext(t *testing.T) {
 		defer wg.Done()
 		defer close(addRuleDone)
 		<-lexingStarted
-
-		// Add multiple rules with a small delay to increase chance of race detection.
-		time.Sleep(time.Millisecond)
 
 		err := lx.AddRule(lexTypeB, matchString("b"))
 		if err != nil {
@@ -1321,8 +1399,13 @@ func TestLexerConcurrentAddRuleAndNext(t *testing.T) {
 	assert.NoError(t, raceError, "Encountered error during concurrent operations")
 }
 
-// TestLexerPathologicalRuleWithDeepBacktracking tests a complex rule that accepts
-// early, continues, and then forces a deep backtrack.
+// TestLexerPathologicalRuleWithDeepBacktracking pins the only-grows rule with a
+// deep pushback chain. The rule accepts every 'a', continues through 'b', and at
+// end of input runs a chain of backtrackDepth+1 pushbacks. On n 'a's followed by
+// 'b' the stack holds n+2 symbols (EOF included), so the chain's accept has
+// length 1. That is shorter than the n symbols the rule already accepted, so the
+// VM ignores it (processor.go:125): a pushback chain, however deep, cannot
+// shorten or withdraw a match the rule already recorded.
 func TestLexerPathologicalRuleWithDeepBacktracking(t *testing.T) {
 	const lexTypePathological = textlexer.LexemeType("PATHOLOGICAL")
 	const lexTypeUnknown = textlexer.LexemeTypeUnknown
@@ -1366,12 +1449,14 @@ func TestLexerPathologicalRuleWithDeepBacktracking(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var pathologicalRule, finalState textlexer.Rule
 
+			// Excludes the EOF symbol, 'b', and backtrackDepth-1 of the 'a's.
 			finalState = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-				return backtrack(tc.backtrackDepth, textlexer.StateAccept), textlexer.StatePushBack
+				return excludeLast(tc.backtrackDepth+1, textlexer.StateAccept)
 			}
 
 			// This rule accepts every 'a' but continues matching. When it sees a 'b',
-			// it transitions to the final state to force the backtrack to the last accept.
+			// it continues into the final state, whose deep chain reports a match of
+			// length 1. The earlier accept of all the 'a's stays.
 			pathologicalRule = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 				r := s.Rune()
 				if r == 'a' {
@@ -1490,24 +1575,44 @@ func TestLexerMaximumLimits(t *testing.T) {
 		const maxPushback = 1000
 		input := strings.Repeat("a", maxPushback+10)
 
-		var deepPushbackRule textlexer.Rule
-		deepPushbackRule = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-			if s.Rune() == 'a' {
-				return backtrack(maxPushback+5, textlexer.StateAccept), textlexer.StatePushBack
+		// deepPushbackRule continues over every 'a' and, at end of input,
+		// excludes the last `exclude` symbols of the stack. The stack then holds
+		// maxPushback+10 'a's plus the EOF symbol.
+		deepPushbackRule := func(exclude int) textlexer.Rule {
+			var loop textlexer.Rule
+			loop = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+				if s.Rune() == 'a' {
+					return loop, textlexer.StateContinue
+				}
+				if s.IsEOF() {
+					return excludeLast(exclude, textlexer.StateAccept)
+				}
+				return nil, textlexer.StateReject
 			}
-			return nil, textlexer.StateReject
+			return loop
 		}
 
+		// A chain of maxPushback+1 pushbacks (the EOF symbol and 1000 'a's)
+		// runs to its accept and leaves the first 10 'a's.
 		lx := textlexer.New(strings.NewReader(input))
-		lx.MustAddRule("DEEP_PUSHBACK", deepPushbackRule)
+		lx.MustAddRule("DEEP_PUSHBACK", deepPushbackRule(maxPushback+1))
 
-		// The lexer should handle excessive pushback gracefully.
 		lex, err := lx.Next()
-		if err == nil {
-			assert.NotNil(t, lex)
-		} else {
-			assert.Contains(t, err.Error(), "pushback")
-		}
+		require.NoError(t, err)
+		assert.Equal(t, textlexer.LexemeType("DEEP_PUSHBACK"), lex.Type())
+		assert.Equal(t, strings.Repeat("a", 10), lex.Text())
+		assert.Equal(t, 0, lex.Offset())
+
+		// One pushback more than the stack holds passes its bottom, so the VM
+		// retires the rule (processor.go:110) and no rule matches the first 'a'.
+		lx = textlexer.New(strings.NewReader(input))
+		lx.MustAddRule("DEEP_PUSHBACK", deepPushbackRule(maxPushback+12))
+
+		lex, err = lx.Next()
+		require.NoError(t, err)
+		assert.Equal(t, textlexer.LexemeTypeUnknown, lex.Type())
+		assert.Equal(t, "a", lex.Text())
+		assert.Equal(t, 0, lex.Offset())
 	})
 
 	t.Run("Maximum number of concurrent scanners", func(t *testing.T) {
@@ -1546,47 +1651,46 @@ func TestLexerZeroLengthMatchPrevention(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			// This rule always produces a zero-length match.
+			// This rule always produces a zero-length match: one pushback on the
+			// first symbol excludes it, and the accept has length 0. The VM
+			// commits no empty token and emits one UNKNOWN rune instead
+			// (textlexer.go:482-485); TestProcessZeroLengthMatch proves the
+			// branch.
 			zeroLengthRule := func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-				return backtrack(1, textlexer.StateAccept), textlexer.StatePushBack
+				return excludeLast(1, textlexer.StateAccept)
 			}
+
+			// Each Next reads one symbol and the rule takes two invocations
+			// on it (the read and the pushback), so a run over the input and
+			// the EOF symbol takes 2*(len+1). The budget doubles that; an
+			// infinite loop inside one Next exceeds it and fails the test.
+			budget := 4 * (len(tc.input) + 1)
 
 			lx := textlexer.New(strings.NewReader(tc.input))
-			lx.MustAddRule("ZERO", zeroLengthRule)
+			lx.MustAddRule("ZERO", boundedRule(t, budget, zeroLengthRule))
 
-			done := make(chan struct{})
-			go func() {
-				defer close(done)
+			tokenCount := 0
+			iterations := 0
+			maxIterations := tc.expected*2 + 10
 
-				tokenCount := 0
-				iterations := 0
-				maxIterations := tc.expected*2 + 10
-
-				for iterations < maxIterations {
-					lex, err := lx.Next()
-					if err == io.EOF {
-						break
-					}
-					require.NoError(t, err)
-					require.NotNil(t, lex)
-
-					// Should produce UNKNOWN tokens, one per character.
-					assert.Equal(t, textlexer.LexemeTypeUnknown, lex.Type())
-					assert.Equal(t, 1, lex.Len(), "Zero-length match should result in single-char UNKNOWN token")
-
-					tokenCount++
-					iterations++
+			for iterations < maxIterations {
+				lex, err := lx.Next()
+				if err == io.EOF {
+					break
 				}
+				require.NoError(t, err)
+				require.NotNil(t, lex)
 
-				assert.Equal(t, tc.expected, tokenCount, "Should produce one token per input character")
-				assert.Less(t, iterations, maxIterations, "Too many iterations - possible infinite loop")
-			}()
+				// Should produce UNKNOWN tokens, one per character.
+				assert.Equal(t, textlexer.LexemeTypeUnknown, lex.Type())
+				assert.Equal(t, 1, lex.Len(), "Zero-length match should result in single-char UNKNOWN token")
 
-			select {
-			case <-done:
-			case <-time.After(5 * time.Second):
-				t.Fatal("Test timeout - likely infinite loop in zero-length match handling")
+				tokenCount++
+				iterations++
 			}
+
+			assert.Equal(t, tc.expected, tokenCount, "Should produce one token per input character")
+			assert.Less(t, iterations, maxIterations, "Too many iterations - possible infinite loop")
 		})
 	}
 }
@@ -1655,6 +1759,8 @@ func TestLexerPathologicalRules(t *testing.T) {
 	t.Run("Bait and Switch Rule", func(t *testing.T) {
 		// A malicious rule ("Bait") finds a long match, but then backtracks to report a shorter one.
 		// The lexer must not be fooled and should select the longest match recorded by any rule.
+		// This test pins the only-grows rule: within a token a rule's recorded match only
+		// grows (processor.go:125), so a pushback chain cannot shorten an earlier accept.
 		const (
 			lexTypeBait   = textlexer.LexemeType("BAIT")
 			lexTypeHonest = textlexer.LexemeType("HONEST")
@@ -1664,7 +1770,8 @@ func TestLexerPathologicalRules(t *testing.T) {
 		var baitRule textlexer.Rule
 		baitFinalizer := func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 			if s.Rune() == ';' {
-				return backtrack(4, textlexer.StateAccept), textlexer.StatePushBack
+				// Exclude five of the six symbols ("oken;"): a match of length 1.
+				return excludeLast(5, textlexer.StateAccept)
 			}
 			return nil, textlexer.StateReject
 		}
@@ -1735,9 +1842,10 @@ func TestLexerPathologicalRules(t *testing.T) {
 		var vetoRule textlexer.Rule
 		vetoFinalizer := func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 			if s.Rune() == ';' {
-				// Veto: After seeing ';', reject further matching.
-				// This does NOT erase the lastAccept value already recorded for this rule.
-				return backtrack(4, textlexer.StateReject), textlexer.StatePushBack
+				// Veto: After seeing ';', push it back and end the chain with
+				// the rule's own StateReject. This does NOT erase the lastAccept
+				// value already recorded for this rule.
+				return excludeLast(1, textlexer.StateReject)
 			}
 			return nil, textlexer.StateReject
 		}
@@ -1906,26 +2014,24 @@ func TestLexerPathologicalRules(t *testing.T) {
 			return nil, textlexer.StateReject
 		}
 
+		// The rule takes one invocation per symbol read. The first token reads
+		// the whole input, then "b" is read again and the EOF symbol once, so
+		// a run takes len+2 invocations. A budget linear in the input fails
+		// the test, from inside the rule, on an explosion or a lexer that
+		// stops terminating.
+		budget := 4 * (len(input) + 1)
+
 		lx := textlexer.New(strings.NewReader(input))
-		lx.MustAddRule(lexTypeExponential, exponentialRule)
+		lx.MustAddRule(lexTypeExponential, boundedRule(t, budget, exponentialRule))
 
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			for {
-				_, err := lx.Next()
-				if err == io.EOF {
-					break
-				}
+		for {
+			_, err := lx.Next()
+			if err == io.EOF {
+				break
 			}
-		}()
-
-		select {
-		case <-done:
-			assert.Less(t, callCount, 1001, "Rule call count should be limited")
-		case <-time.After(2 * time.Second):
-			t.Fatal("Test timeout - possible exponential explosion")
 		}
+
+		assert.Less(t, callCount, 1001, "Rule call count should be limited")
 	})
 
 	t.Run("Memory Exhaustion Attack", func(t *testing.T) {
@@ -2106,7 +2212,8 @@ func TestLexerChaos(t *testing.T) {
 		u := rng.Float64()
 
 		if u < 0.1 && matchLength > 1 {
-			return backtrack(1, textlexer.StateAccept), textlexer.StatePushBack
+			// Exclude the symbol just read and accept the rest.
+			return excludeLast(1, textlexer.StateAccept)
 		}
 
 		if u < 0.7 && matchLength < 100 {
@@ -2120,38 +2227,41 @@ func TestLexerChaos(t *testing.T) {
 		return nil, textlexer.StateReject
 	}
 
-	lx.MustAddRule(lexTypeChaos, chaosRule)
+	// The rule continues only while matchLength is below 100, so a token reads
+	// at most 100 symbols. The excludeLast branch does not reset matchLength,
+	// which only makes the next token shorter. Each read takes at most one
+	// extra pushback invocation, and every token consumes at least one symbol,
+	// so a run over the input and the EOF symbol takes at most
+	// 2*100*(inputSize+1) invocations. This is a worst-case bound, far above
+	// the count a correct run takes; a lexer that stops terminating exceeds it
+	// and fails the test.
+	//
+	// The rule ignores the symbol it reads and its RNG has a fixed seed, so a
+	// run does not depend on the random input: a failure reproduces with any
+	// input.
+	budget := 2 * 100 * (inputSize + 1)
+	lx.MustAddRule(lexTypeChaos, boundedRule(t, budget, chaosRule))
 
-	done := make(chan struct{})
 	tokenCount := 0
-
-	go func() {
-		defer close(done)
-		for {
-			_, err := lx.Next()
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				// Errors are expected in a chaos test; the goal is to ensure no panics or hangs.
-				t.Logf("Chaos test encountered error (expected): %v", err)
-				break
-			}
-			tokenCount++
-
-			if tokenCount > inputSize*2 {
-				t.Logf("Chaos test produced maximum tokens, stopping")
-				break
-			}
+	for {
+		_, err := lx.Next()
+		if err == io.EOF {
+			break
 		}
-	}()
+		if err != nil {
+			// Errors are expected in a chaos test; the goal is to ensure no panics or hangs.
+			t.Logf("Chaos test encountered error (expected): %v", err)
+			break
+		}
+		tokenCount++
 
-	select {
-	case <-done:
-		assert.Greater(t, tokenCount, 0, "Chaos test should have produced at least one token")
-	case <-time.After(10 * time.Second):
-		t.Fatal("Chaos test timeout - possible infinite loop or deadlock")
+		if tokenCount > inputSize*2 {
+			t.Logf("Chaos test produced maximum tokens, stopping")
+			break
+		}
 	}
+
+	assert.Greater(t, tokenCount, 0, "Chaos test should have produced at least one token")
 }
 
 // TestLexerInfiniteLoopProtection specifically tests that the lexer protects against
@@ -2183,8 +2293,9 @@ func TestLexerInfiniteLoopProtection(t *testing.T) {
 		},
 		{
 			name: "Zero Length Accept Loop",
+			// One pushback on the first symbol excludes it: a zero-length accept.
 			rule: func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-				return backtrack(1, textlexer.StateAccept), textlexer.StatePushBack
+				return excludeLast(1, textlexer.StateAccept)
 			},
 		},
 	}
@@ -2192,34 +2303,32 @@ func TestLexerInfiniteLoopProtection(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			input := "test"
+
+			// A rule that never settles is retired at EOF and yields a
+			// one-rune UNKNOWN token, so the k-th Next from the end reads at
+			// most k symbols (the rest of the input and the EOF symbol). Each
+			// of these rules takes at most two invocations per symbol read,
+			// so a run takes at most (len+1)*(len+2) invocations. A lexer
+			// stuck in a loop exceeds the budget and fails the test.
+			n := len(input)
+			budget := (n + 1) * (n + 2)
+
 			lx := textlexer.New(strings.NewReader(input))
-			lx.MustAddRule("LOOP", tc.rule)
+			lx.MustAddRule("LOOP", boundedRule(t, budget, tc.rule))
 
-			done := make(chan struct{})
-			go func() {
-				defer close(done)
+			iterations := 0
+			maxIterations := 100
 
-				iterations := 0
-				maxIterations := 100
-
-				for iterations < maxIterations {
-					_, err := lx.Next()
-					if err == io.EOF {
-						break
-					}
-					if err != nil {
-						// Expected - the lexer should error out of an infinite loop.
-						break
-					}
-					iterations++
+			for iterations < maxIterations {
+				_, err := lx.Next()
+				if err == io.EOF {
+					break
 				}
-			}()
-
-			select {
-			case <-done:
-			// Test completed, meaning the lexer handled the problematic rule.
-			case <-time.After(2 * time.Second):
-				t.Fatal("Infinite loop protection failed - lexer is stuck")
+				if err != nil {
+					// Expected - the lexer should error out of an infinite loop.
+					break
+				}
+				iterations++
 			}
 		})
 	}
@@ -2255,34 +2364,21 @@ func TestLexerResourceExhaustion(t *testing.T) {
 
 		input := strings.Repeat("a", maxDepth)
 		lx := textlexer.New(strings.NewReader(input))
-		lx.MustAddRule("DEEP", stackSafeDeepRule())
+		// The first Next invokes the rule once per symbol and the EOF probe
+		// once more, so the run takes maxDepth+1 invocations. The budget
+		// doubles that; a lexer stuck in a loop exceeds it and fails the test.
+		budget := 2 * (maxDepth + 1)
+		lx.MustAddRule("DEEP", boundedRule(t, budget, stackSafeDeepRule()))
 
-		done := make(chan bool)
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					t.Logf("Panic recovered: %v", r)
-					done <- false
-				} else {
-					done <- true
-				}
-			}()
+		// Next runs on the test goroutine, so a panic fails the test. A Go
+		// stack overflow is fatal and cannot be recovered in any case.
+		lex, err := lx.Next()
+		require.NoError(t, err)
+		require.NotNil(t, lex)
+		assert.Equal(t, maxDepth, lex.Len())
 
-			lex, err := lx.Next()
-			require.NoError(t, err)
-			require.NotNil(t, lex)
-			assert.Equal(t, maxDepth, lex.Len())
-
-			_, err = lx.Next()
-			require.Equal(t, io.EOF, err)
-		}()
-
-		select {
-		case success := <-done:
-			assert.True(t, success, "Should not panic from stack overflow")
-		case <-time.After(5 * time.Second):
-			t.Fatal("Test timeout - lexer may be stuck in a loop")
-		}
+		_, err = lx.Next()
+		require.Equal(t, io.EOF, err)
 	})
 
 	t.Run("Memory Compaction Under Pressure", func(t *testing.T) {
@@ -2712,7 +2808,10 @@ func TestLexerErrorConditions(t *testing.T) {
 		}
 	})
 
-	t.Run("Rule Panic Types", func(t *testing.T) {
+	t.Run("Rule Panic Types Are Recovered", func(t *testing.T) {
+		// A panic with any value is recovered and retires the rule, a nil
+		// value included (on Go 1.21+ panic(nil) raises a
+		// *runtime.PanicNilError). A sibling rule's match survives.
 		testCases := []struct {
 			name       string
 			panicValue interface{}
@@ -2731,18 +2830,22 @@ func TestLexerErrorConditions(t *testing.T) {
 					panic(tc.panicValue)
 				}
 
-				lx := textlexer.New(strings.NewReader(input))
-				lx.MustAddRule("PANIC", panicRule)
+				t.Run("only rule", func(t *testing.T) {
+					lx := textlexer.New(strings.NewReader(input))
+					lx.MustAddRule("PANIC", panicRule)
 
-				if tc.panicValue == nil {
-					assert.Panics(t, func() {
-						_, _ = lx.Next()
+					assertRetireStream(t, lx, unknownLexemes(input, 0))
+				})
+
+				t.Run("with a sibling", func(t *testing.T) {
+					lx := textlexer.New(strings.NewReader(input))
+					lx.MustAddRule("PANIC", panicRule)
+					lx.MustAddRule("WORD", newLettersRule())
+
+					assertRetireStream(t, lx, []*textlexer.Lexeme{
+						textlexer.NewLexemeFromString("WORD", input, 0),
 					})
-				} else {
-					assert.PanicsWithValue(t, tc.panicValue, func() {
-						_, _ = lx.Next()
-					})
-				}
+				})
 			})
 		}
 	})
@@ -3001,7 +3104,9 @@ func TestLexerBacktrackingAndBufferState(t *testing.T) {
 	)
 
 	// This rule matches "for" but only if it's not followed by another letter.
-	// If it is, it backtracks, effectively rejecting the match as a keyword.
+	// It does not accept at 'r', because a later pushback could not withdraw that
+	// accept. It continues and decides on the symbol after "for": a letter makes
+	// it reject; any other symbol is pushed back and "for" is accepted.
 	forKeywordRule := func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 		if s.Rune() == 'f' {
 			return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
@@ -3011,12 +3116,11 @@ func TestLexerBacktrackingAndBufferState(t *testing.T) {
 							return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 								// Lookahead: if the next char is a letter, this is not a keyword.
 								if isLetter(s) {
-									// Reject and push everything back.
-									return backtrack(4, textlexer.StateReject), textlexer.StatePushBack
+									return nil, textlexer.StateReject
 								}
 								// It's a keyword. Push back the non-letter symbol.
-								return backtrack(1, textlexer.StateAccept), textlexer.StatePushBack
-							}, textlexer.StateAccept
+								return excludeLast(1, textlexer.StateAccept)
+							}, textlexer.StateContinue
 						}
 						return nil, textlexer.StateReject
 					}, textlexer.StateContinue
@@ -3046,9 +3150,9 @@ func TestLexerBacktrackingAndBufferState(t *testing.T) {
 	assert.Equal(t, " ", lex.Text())
 	assert.Equal(t, 3, lex.Offset())
 
-	// 3. "format". The keyword rule will see "form" then "a", causing it to
-	//    reject and push back all 4 symbols. The ID rule will then win with
-	//    the longest match, "format".
+	// 3. "format". The keyword rule reads "for" and decides on the next
+	//    symbol, 'm': a letter, so it rejects without having accepted. The ID
+	//    rule wins with the longest match, "format".
 	lex, err = lx.Next()
 	require.NoError(t, err)
 	assert.Equal(t, lexTypeID, lex.Type())
@@ -3107,4 +3211,1019 @@ func TestLexerProcessorRecreationWithNewRules(t *testing.T) {
 		lexTypeB,
 	}
 	assert.Equal(t, expectedTypes, foundTypes)
+}
+
+// literalThen returns a Rule that continues over the runes of lit without
+// accepting and hands the symbol after them to then. Any other symbol rejects.
+func literalThen(lit string, then textlexer.Rule) textlexer.Rule {
+	runes := []rune(lit)
+	var step func(i int) textlexer.Rule
+	step = func(i int) textlexer.Rule {
+		if i == len(runes) {
+			return then
+		}
+		return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+			if s.Rune() != runes[i] {
+				return nil, textlexer.StateReject
+			}
+			return step(i + 1), textlexer.StateContinue
+		}
+	}
+	return step(0)
+}
+
+// unknownLexemes returns one single-rune UNKNOWN lexeme for each rune of s, the
+// first at rune offset offset.
+func unknownLexemes(s string, offset int) []*textlexer.Lexeme {
+	var lexemes []*textlexer.Lexeme
+	for i, r := range []rune(s) {
+		lexemes = append(lexemes, textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, string(r), offset+i))
+	}
+	return lexemes
+}
+
+// lexemesWith returns head followed by the single-rune UNKNOWN lexemes of rest,
+// which starts right after head.
+func lexemesWith(head *textlexer.Lexeme, rest string) []*textlexer.Lexeme {
+	return append([]*textlexer.Lexeme{head}, unknownLexemes(rest, head.Offset()+head.Len())...)
+}
+
+type lookaheadCase struct {
+	name     string
+	input    string
+	expected []*textlexer.Lexeme
+}
+
+// runLookaheadCases lexes each case's input with the rules that setup
+// registers and compares type, text, and offset of every lexeme.
+func runLookaheadCases(t *testing.T, cases []lookaheadCase, setup func(lx *textlexer.TextLexer)) {
+	t.Helper()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			lx := textlexer.New(strings.NewReader(tc.input))
+			setup(lx)
+			assert.Equal(t, lexemeKeys(tc.expected), lexemeKeys(lexAll(t, lx)))
+		})
+	}
+}
+
+// TestLookaheadMultiSymbol: a rule reads four symbols past its match to decide,
+// then excludes all four. "http" is a PROTOCOL only when "://" and a letter
+// follow.
+func TestLookaheadMultiSymbol(t *testing.T) {
+	const lexTypeProtocol = textlexer.LexemeType("PROTOCOL")
+
+	// The rule continues through "http://" and one more symbol. If that symbol
+	// is an ASCII letter, four pushbacks exclude it and "://", and the rule
+	// accepts "http". It never accepts before it has decided.
+	protocolRule := literalThen("http://", func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if isLetter(s) {
+			return excludeLast(4, textlexer.StateAccept)
+		}
+		return nil, textlexer.StateReject
+	})
+
+	runLookaheadCases(t, []lookaheadCase{
+		{
+			name:     "letter after scheme",
+			input:    "http://example.com",
+			expected: lexemesWith(textlexer.NewLexemeFromString(lexTypeProtocol, "http", 0), "://example.com"),
+		},
+		{
+			name:     "non-letter after scheme",
+			input:    "http://$",
+			expected: unknownLexemes("http://$", 0),
+		},
+	}, func(lx *textlexer.TextLexer) {
+		lx.MustAddRule(lexTypeProtocol, protocolRule)
+	})
+}
+
+// TestLookaheadVariableLength: the number of symbols a rule excludes depends on
+// the input. "https" is a PROTOCOL only when "://wikipedia.org/wiki/" and a
+// non-empty page name follow.
+func TestLookaheadVariableLength(t *testing.T) {
+	const (
+		lexTypeProtocol = textlexer.LexemeType("PROTOCOL")
+		prefix          = "://wikipedia.org/wiki/"
+	)
+
+	isPageChar := func(s textlexer.Symbol) bool {
+		r := s.Rune()
+		return isLetter(s) || isDigit(s) || r == '_' || r == '-'
+	}
+
+	// page(n) has read n page-name characters; the count lives in the Rule
+	// values, not in a shared variable. The rule scans the whole page name. On
+	// the first other symbol, or the EOF symbol, it excludes that symbol, the
+	// page name, and the prefix, and accepts "https".
+	var page func(n int) textlexer.Rule
+	page = func(n int) textlexer.Rule {
+		return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+			if isPageChar(s) {
+				return page(n + 1), textlexer.StateContinue
+			}
+			if n == 0 {
+				return nil, textlexer.StateReject
+			}
+			return excludeLast(len(prefix)+n+1, textlexer.StateAccept)
+		}
+	}
+	protocolRule := literalThen("https"+prefix, page(0))
+
+	https := textlexer.NewLexemeFromString(lexTypeProtocol, "https", 0)
+
+	runLookaheadCases(t, []lookaheadCase{
+		{
+			name:     "valid URL at EOF",
+			input:    "https://wikipedia.org/wiki/Lexical_analysis",
+			expected: lexemesWith(https, "://wikipedia.org/wiki/Lexical_analysis"),
+		},
+		{
+			name:     "valid URL followed by a space",
+			input:    "https://wikipedia.org/wiki/Go-2 next",
+			expected: lexemesWith(https, "://wikipedia.org/wiki/Go-2 next"),
+		},
+		{
+			name:     "non-Wikipedia URL",
+			input:    "https://example.org/wiki/Go",
+			expected: unknownLexemes("https://example.org/wiki/Go", 0),
+		},
+		{
+			name:     "partial URL",
+			input:    "https://wikipedia.org/wi",
+			expected: unknownLexemes("https://wikipedia.org/wi", 0),
+		},
+		{
+			name:     "empty page name at EOF",
+			input:    "https://wikipedia.org/wiki/",
+			expected: unknownLexemes("https://wikipedia.org/wiki/", 0),
+		},
+		{
+			name:     "empty page name before a space",
+			input:    "https://wikipedia.org/wiki/ x",
+			expected: unknownLexemes("https://wikipedia.org/wiki/ x", 0),
+		},
+	}, func(lx *textlexer.TextLexer) {
+		lx.MustAddRule(lexTypeProtocol, protocolRule)
+	})
+}
+
+// TestLookaheadTwoCandidateEnds: one rule chooses between two match ends after
+// it has seen what follows. After "abcd" and any number of '.', 'X' yields "ab"
+// and 'Y' yields "abcd".
+func TestLookaheadTwoCandidateEnds(t *testing.T) {
+	const lexTypeR = textlexer.LexemeType("R")
+
+	// dots(n) has read n '.' symbols. 'X' excludes itself, the n dots, and
+	// "cd". 'Y' excludes itself and the n dots. Any other symbol, or the EOF
+	// symbol, rejects.
+	var dots func(n int) textlexer.Rule
+	dots = func(n int) textlexer.Rule {
+		return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+			switch s.Rune() {
+			case '.':
+				return dots(n + 1), textlexer.StateContinue
+			case 'X':
+				return excludeLast(n+3, textlexer.StateAccept)
+			case 'Y':
+				return excludeLast(n+1, textlexer.StateAccept)
+			}
+			return nil, textlexer.StateReject
+		}
+	}
+	rule := literalThen("abcd", dots(0))
+
+	ab := textlexer.NewLexemeFromString(lexTypeR, "ab", 0)
+	abcd := textlexer.NewLexemeFromString(lexTypeR, "abcd", 0)
+
+	runLookaheadCases(t, []lookaheadCase{
+		{name: "X right after abcd", input: "abcdX", expected: lexemesWith(ab, "cdX")},
+		{name: "X after dots", input: "abcd...X", expected: lexemesWith(ab, "cd...X")},
+		{name: "Y right after abcd", input: "abcdY", expected: lexemesWith(abcd, "Y")},
+		{name: "Y after dots", input: "abcd..Y", expected: lexemesWith(abcd, "..Y")},
+		{name: "other symbol", input: "abcd..Z", expected: unknownLexemes("abcd..Z", 0)},
+		{name: "end of input", input: "abcd", expected: unknownLexemes("abcd", 0)},
+	}, func(lx *textlexer.TextLexer) {
+		lx.MustAddRule(lexTypeR, rule)
+	})
+}
+
+// TestLookaheadKeywordBoundary: a keyword rule with no identifier rule beside
+// it decides by one symbol of lookahead. "for" matches before a non-identifier
+// symbol and at end of input, and not inside "format".
+func TestLookaheadKeywordBoundary(t *testing.T) {
+	const lexTypeFor = textlexer.LexemeType("FOR")
+
+	// After "for", an identifier character rejects. Any other symbol, the EOF
+	// symbol included, is excluded by one pushback and "for" is accepted.
+	forRule := literalThen("for", func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if isLetter(s) || isDigit(s) || s.Rune() == '_' {
+			return nil, textlexer.StateReject
+		}
+		return excludeLast(1, textlexer.StateAccept)
+	})
+
+	keyword := textlexer.NewLexemeFromString(lexTypeFor, "for", 0)
+
+	runLookaheadCases(t, []lookaheadCase{
+		{name: "before a parenthesis", input: "for (", expected: lexemesWith(keyword, " (")},
+		{name: "at end of input", input: "for", expected: []*textlexer.Lexeme{keyword}},
+		{name: "inside a longer word", input: "format", expected: unknownLexemes("format", 0)},
+	}, func(lx *textlexer.TextLexer) {
+		lx.MustAddRule(lexTypeFor, forRule)
+	})
+}
+
+// TestLookaheadFloatVersusRange: newUnsignedFloatRule decides by lookahead
+// whether "1." is a float. A second '.' makes it reject, so the integer rule
+// wins "1" in a range such as "1..5".
+func TestLookaheadFloatVersusRange(t *testing.T) {
+	const (
+		lexTypeInteger = textlexer.LexemeType("INT")
+		lexTypeFloat   = textlexer.LexemeType("FLOAT")
+	)
+
+	cases := []lookaheadCase{
+		{
+			name:  "trailing radix before a space",
+			input: "1. ",
+			expected: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString(lexTypeFloat, "1.", 0),
+				textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, " ", 2),
+			},
+		},
+		{
+			name:  "range",
+			input: "1..5",
+			expected: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString(lexTypeInteger, "1", 0),
+				textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, ".", 1),
+				textlexer.NewLexemeFromString(lexTypeFloat, ".5", 2),
+			},
+		},
+		{
+			name:  "float",
+			input: "1.5",
+			expected: []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString(lexTypeFloat, "1.5", 0),
+			},
+		},
+	}
+
+	t.Run("float registered first", func(t *testing.T) {
+		runLookaheadCases(t, cases, func(lx *textlexer.TextLexer) {
+			lx.MustAddRule(lexTypeFloat, newUnsignedFloatRule())
+			lx.MustAddRule(lexTypeInteger, newUnsignedIntegerRule())
+		})
+	})
+	t.Run("integer registered first", func(t *testing.T) {
+		runLookaheadCases(t, cases, func(lx *textlexer.TextLexer) {
+			lx.MustAddRule(lexTypeInteger, newUnsignedIntegerRule())
+			lx.MustAddRule(lexTypeFloat, newUnsignedFloatRule())
+		})
+	})
+}
+
+// TestPushBackSymbolOrder: each pushback in a chain shows `next` the next symbol
+// down the stack, starting with the symbol just read. It also shows the count
+// rule: a helper that issues two pushbacks, entered through one more
+// StatePushBack, excludes three symbols.
+func TestPushBackSymbolOrder(t *testing.T) {
+	const lexTypeR = textlexer.LexemeType("R")
+
+	var seen []rune
+	// record(k) records the symbol it is shown, then pushes back k more times.
+	var record func(k int) textlexer.Rule
+	record = func(k int) textlexer.Rule {
+		return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+			seen = append(seen, s.Rune())
+			if k == 0 {
+				return nil, textlexer.StateAccept
+			}
+			return record(k - 1), textlexer.StatePushBack
+		}
+	}
+	rule := literalThen("abc", func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.Rune() != 'd' {
+			return nil, textlexer.StateReject
+		}
+		return record(2), textlexer.StatePushBack
+	})
+
+	lx := textlexer.New(strings.NewReader("abcd"))
+	lx.MustAddRule(lexTypeR, rule)
+
+	expected := lexemesWith(textlexer.NewLexemeFromString(lexTypeR, "a", 0), "bcd")
+	assert.Equal(t, lexemeKeys(expected), lexemeKeys(lexAll(t, lx)))
+	assert.Equal(t, []rune{'d', 'c', 'b'}, seen, "the chain must see the stack from the top down")
+}
+
+// TestPushBackIsPerRule: one rule's pushback does not change what another rule
+// is shown. The stack is the same for every rule within a step.
+func TestPushBackIsPerRule(t *testing.T) {
+	const (
+		lexTypePush = textlexer.LexemeType("PUSH")
+		lexTypeSeen = textlexer.LexemeType("SEEN")
+	)
+
+	// PUSH reads "ab" and, on 'c', excludes 'c' and 'b' and accepts "a".
+	pushRule := literalThen("ab", func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.Rune() != 'c' {
+			return nil, textlexer.StateReject
+		}
+		return excludeLast(2, textlexer.StateAccept)
+	})
+
+	// SEEN runs after PUSH in each step. It records every symbol it is shown and
+	// accepts every letter.
+	var seen []rune
+	var seenRule textlexer.Rule
+	seenRule = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		seen = append(seen, s.Rune())
+		if isLetter(s) {
+			return seenRule, textlexer.StateAccept
+		}
+		return nil, textlexer.StateReject
+	}
+
+	lx := textlexer.New(strings.NewReader("abc"))
+	lx.MustAddRule(lexTypePush, pushRule)
+	lx.MustAddRule(lexTypeSeen, seenRule)
+
+	lex, err := lx.Next()
+	require.NoError(t, err)
+	assert.Equal(t, lexemeKeys([]*textlexer.Lexeme{textlexer.NewLexemeFromString(lexTypeSeen, "abc", 0)}),
+		lexemeKeys([]*textlexer.Lexeme{lex}))
+	assert.Equal(t, []rune{'a', 'b', 'c', textlexer.RuneEOF}, seen,
+		"PUSH's chain on 'c' must not change the symbols SEEN is shown")
+
+	_, err = lx.Next()
+	assert.Equal(t, io.EOF, err)
+}
+
+// TestPushBackAtEOF: at end of input the stack also holds the EOF symbol, and
+// the first pushback removes it. On input "a", one pushback leaves "a"; two are a
+// zero-length match; three pass the bottom of the stack. Two and three give the
+// same lexeme here; TestProcessPushBackAtEOF tells them apart.
+func TestPushBackAtEOF(t *testing.T) {
+	const lexTypeR = textlexer.LexemeType("R")
+
+	for _, tc := range []struct {
+		pushbacks int
+		expected  *textlexer.Lexeme
+	}{
+		{1, textlexer.NewLexemeFromString(lexTypeR, "a", 0)},
+		{2, textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "a", 0)},
+		{3, textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "a", 0)},
+	} {
+		t.Run(fmt.Sprintf("%d pushbacks", tc.pushbacks), func(t *testing.T) {
+			rule := literalThen("a", func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+				if !s.IsEOF() {
+					return nil, textlexer.StateReject
+				}
+				return excludeLast(tc.pushbacks, textlexer.StateAccept)
+			})
+
+			lx := textlexer.New(strings.NewReader("a"))
+			lx.MustAddRule(lexTypeR, rule)
+			assert.Equal(t, lexemeKeys([]*textlexer.Lexeme{tc.expected}), lexemeKeys(lexAll(t, lx)))
+		})
+	}
+}
+
+// TestPushBackRetiresRuleKeepsEarlierAccept: a pushback past the bottom of the
+// stack, or (nil, StatePushBack), retires the rule. The accept it recorded
+// earlier stays.
+func TestPushBackRetiresRuleKeepsEarlierAccept(t *testing.T) {
+	const lexTypeR = textlexer.LexemeType("R")
+
+	// more accepts every real symbol. It is reached only if the VM does not
+	// retire the rule, and then the rule would match all of "abc".
+	var more textlexer.Rule
+	more = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
+		return more, textlexer.StateAccept
+	}
+
+	// over(k) pushes back k more times and then hands the rule to more.
+	var over func(k int) textlexer.Rule
+	over = func(k int) textlexer.Rule {
+		return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+			if k == 0 {
+				return more, textlexer.StateAccept
+			}
+			return over(k - 1), textlexer.StatePushBack
+		}
+	}
+
+	for _, tc := range []struct {
+		name string
+		onB  textlexer.Rule
+	}{
+		{
+			// On 'b' the stack holds two symbols, and the chain issues three
+			// pushbacks.
+			name: "pushback past the bottom of the stack",
+			onB: func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+				return over(2), textlexer.StatePushBack
+			},
+		},
+		{
+			name: "nil next with StatePushBack",
+			onB: func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+				return nil, textlexer.StatePushBack
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rule := func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+				if s.Rune() != 'a' {
+					return nil, textlexer.StateReject
+				}
+				return tc.onB, textlexer.StateAccept
+			}
+
+			lx := textlexer.New(strings.NewReader("abc"))
+			lx.MustAddRule(lexTypeR, rule)
+
+			expected := lexemesWith(textlexer.NewLexemeFromString(lexTypeR, "a", 0), "bc")
+			assert.Equal(t, lexemeKeys(expected), lexemeKeys(lexAll(t, lx)))
+		})
+	}
+}
+
+// TestPushBackChainEndingContinue pins the v0.2.3 result of an unsupported chain
+// ending: a chain that ends in StateContinue. The VM keeps the pushback count
+// for the current symbol step only, so the rule stays active and the excluded
+// symbol is counted back in by later accepts. A chain must end in
+// (nil, StateAccept) or StateReject; see KD-5 in docs/specs/core-contract.md.
+func TestPushBackChainEndingContinue(t *testing.T) {
+	const lexTypeR = textlexer.LexemeType("R")
+
+	// tail accepts every real symbol and rejects the EOF symbol.
+	var tail textlexer.Rule
+	tail = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
+		return tail, textlexer.StateAccept
+	}
+
+	// The rule reads "ab" and, on the real symbol 'c', pushes 'c' back and
+	// continues into tail. The pushback is forgotten when the step ends.
+	rule := literalThen("ab", func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		return func(textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+			return tail, textlexer.StateContinue
+		}, textlexer.StatePushBack
+	})
+
+	lx := textlexer.New(strings.NewReader("abcde"))
+	lx.MustAddRule(lexTypeR, rule)
+
+	expected := []*textlexer.Lexeme{textlexer.NewLexemeFromString(lexTypeR, "abcde", 0)}
+	assert.Equal(t, lexemeKeys(expected), lexemeKeys(lexAll(t, lx)))
+}
+
+// TestPushBackChainEndingAcceptWithNext pins the v0.2.3 result of the other
+// unsupported chain ending: (non-nil next, StateAccept). The VM records the
+// shorter length, keeps the rule active, and drops the pushback count when the
+// step ends, so a later accept counts the excluded symbol back in. The
+// supported ending, (nil, StateAccept), is shown for contrast. See KD-5 in
+// docs/specs/core-contract.md.
+func TestPushBackChainEndingAcceptWithNext(t *testing.T) {
+	const lexTypeR = textlexer.LexemeType("R")
+
+	// more accepts every real symbol and rejects the EOF symbol.
+	var more textlexer.Rule
+	more = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
+		return more, textlexer.StateAccept
+	}
+
+	// The rule continues at 'a' and, on the real symbol 'X', pushes 'X' back
+	// and accepts with next.
+	ruleWithNext := func(next textlexer.Rule) textlexer.Rule {
+		return literalThen("a", func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+			if s.Rune() != 'X' {
+				return nil, textlexer.StateReject
+			}
+			return func(textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+				return next, textlexer.StateAccept
+			}, textlexer.StatePushBack
+		})
+	}
+
+	runLookaheadCases(t, []lookaheadCase{
+		{
+			name:     "unsupported: non-nil next",
+			input:    "aXbc",
+			expected: []*textlexer.Lexeme{textlexer.NewLexemeFromString(lexTypeR, "aXbc", 0)},
+		},
+	}, func(lx *textlexer.TextLexer) {
+		lx.MustAddRule(lexTypeR, ruleWithNext(more))
+	})
+
+	runLookaheadCases(t, []lookaheadCase{
+		{
+			name:     "supported: nil next",
+			input:    "aXbc",
+			expected: lexemesWith(textlexer.NewLexemeFromString(lexTypeR, "a", 0), "Xbc"),
+		},
+	}, func(lx *textlexer.TextLexer) {
+		lx.MustAddRule(lexTypeR, ruleWithNext(nil))
+	})
+}
+
+// assertRetireStream lexes all of lx and compares each lexeme's type, text, rune
+// offset, and byte span with expected. The inputs are ASCII, so an expected
+// lexeme's byte span is [offset, offset+len). lexAll fails the test on any
+// error, so the stream must end in io.EOF.
+func assertRetireStream(t *testing.T, lx *textlexer.TextLexer, expected []*textlexer.Lexeme) {
+	t.Helper()
+
+	key := func(typ textlexer.LexemeType, text string, offset, start, end int) string {
+		return fmt.Sprintf("%s|%q|%d|%d-%d", typ, text, offset, start, end)
+	}
+
+	want := make([]string, len(expected))
+	for i, lex := range expected {
+		want[i] = key(lex.Type(), lex.Text(), lex.Offset(), lex.Offset(), lex.Offset()+lex.Len())
+	}
+
+	found := lexAll(t, lx)
+	got := make([]string, len(found))
+	for i, lex := range found {
+		got[i] = key(lex.Type(), lex.Text(), lex.Offset(), lex.Span().Start().ByteOffset(), lex.Span().End().ByteOffset())
+	}
+
+	assert.Equal(t, want, got)
+
+	_, err := lx.Next()
+	assert.Equal(t, io.EOF, err, "lexing must stay at io.EOF")
+}
+
+// newLettersRule matches a run of ASCII letters. It accepts every letter and
+// rejects any other symbol, the EOF symbol included, so it settles at end of
+// input.
+func newLettersRule() textlexer.Rule {
+	var loop textlexer.Rule
+	loop = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if isLetter(s) {
+			return loop, textlexer.StateAccept
+		}
+		return nil, textlexer.StateReject
+	}
+	return loop
+}
+
+// TestInvalidStateRetiresRule: a State outside the four constants retires only
+// the rule that returned it, as StateReject does. The VM does not panic, and a
+// sibling rule's match is emitted. See KD-1 in docs/specs/core-contract.md.
+func TestInvalidStateRetiresRule(t *testing.T) {
+	const (
+		lexTypeWord = textlexer.LexemeType("WORD")
+		lexTypeBad  = textlexer.LexemeType("BAD")
+		invalid     = textlexer.State(9)
+	)
+
+	// direct continues on its first symbol and returns the invalid State on
+	// its second.
+	direct := func(textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		return func(textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+			return nil, invalid
+		}, textlexer.StateContinue
+	}
+
+	// chained continues on its first symbol. On its second it starts a
+	// pushback chain whose last step returns the invalid State, so the VM
+	// meets the value at the end of the chain, not as a direct verdict.
+	chained := func(textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		return func(textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+			return func(textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+				return nil, invalid
+			}, textlexer.StatePushBack
+		}, textlexer.StateContinue
+	}
+
+	for _, tc := range []struct {
+		name string
+		bad  textlexer.Rule
+	}{
+		{"direct", direct},
+		{"end of pushback chain", chained},
+	} {
+		t.Run(tc.name+", with a sibling", func(t *testing.T) {
+			// BAD is registered first, so it steps before WORD on each symbol.
+			lx := textlexer.New(strings.NewReader("ab"))
+			lx.MustAddRule(lexTypeBad, tc.bad)
+			lx.MustAddRule(lexTypeWord, newLettersRule())
+
+			assertRetireStream(t, lx, []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString(lexTypeWord, "ab", 0),
+			})
+		})
+
+		t.Run(tc.name+", only rule", func(t *testing.T) {
+			// BAD never accepts, so each token is one UNKNOWN rune. On the
+			// last rune its second symbol is the EOF symbol.
+			lx := textlexer.New(strings.NewReader("ab"))
+			lx.MustAddRule(lexTypeBad, tc.bad)
+
+			assertRetireStream(t, lx, unknownLexemes("ab", 0))
+		})
+	}
+}
+
+// TestAcceptOfEOFSymbolIsDiscarded: an accept whose length counts the synthetic
+// EOF symbol is longer than the symbols read. The VM discards that verdict and
+// retires the rule; an earlier accept by the same rule stays, and a sibling
+// rule's match is emitted. An accept whose pushback chain excludes the EOF
+// symbol is valid. See KD-3 in docs/specs/core-contract.md.
+func TestAcceptOfEOFSymbolIsDiscarded(t *testing.T) {
+	const (
+		lexTypeWord = textlexer.LexemeType("WORD")
+		lexTypeR    = textlexer.LexemeType("R")
+	)
+
+	t.Run("sibling", func(t *testing.T) {
+		// continueThenAcceptEOF continues on every real symbol and accepts the
+		// EOF symbol. It records no other accept.
+		var continueThenAcceptEOF textlexer.Rule
+		continueThenAcceptEOF = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+			if s.IsEOF() {
+				return nil, textlexer.StateAccept
+			}
+			return continueThenAcceptEOF, textlexer.StateContinue
+		}
+
+		// R is registered first. Its discarded accept of three symbols would
+		// otherwise be the longest.
+		lx := textlexer.New(strings.NewReader("ab"))
+		lx.MustAddRule(lexTypeR, continueThenAcceptEOF)
+		lx.MustAddRule(lexTypeWord, newLettersRule())
+
+		assertRetireStream(t, lx, []*textlexer.Lexeme{
+			textlexer.NewLexemeFromString(lexTypeWord, "ab", 0),
+		})
+	})
+
+	t.Run("earlier accept by the same rule", func(t *testing.T) {
+		// acceptAll accepts every letter and also the EOF symbol. Its accept
+		// of "ab" is recorded; its accept of the EOF symbol is discarded.
+		var acceptAll textlexer.Rule
+		acceptAll = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+			if s.IsEOF() {
+				return nil, textlexer.StateAccept
+			}
+			if isLetter(s) {
+				return acceptAll, textlexer.StateAccept
+			}
+			return nil, textlexer.StateReject
+		}
+
+		lx := textlexer.New(strings.NewReader("ab"))
+		lx.MustAddRule(lexTypeR, acceptAll)
+
+		assertRetireStream(t, lx, []*textlexer.Lexeme{
+			textlexer.NewLexemeFromString(lexTypeR, "ab", 0),
+		})
+	})
+
+	// The regression guards: a pushback chain at EOF that excludes the EOF
+	// symbol accepts the real symbols. With a nil next the rule stops; with a
+	// non-nil next the accept is recorded and the rule is retired, because no
+	// input follows the EOF symbol.
+	for _, tc := range []struct {
+		name string
+		next func(self textlexer.Rule) textlexer.Rule
+	}{
+		{"pushback excludes the EOF symbol, nil next", func(textlexer.Rule) textlexer.Rule { return nil }},
+		{"pushback excludes the EOF symbol, non-nil next", func(self textlexer.Rule) textlexer.Rule { return self }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var rule textlexer.Rule
+			rule = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+				if s.IsEOF() {
+					return func(textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+						return tc.next(rule), textlexer.StateAccept
+					}, textlexer.StatePushBack
+				}
+				if isLetter(s) {
+					return rule, textlexer.StateContinue
+				}
+				return nil, textlexer.StateReject
+			}
+
+			lx := textlexer.New(strings.NewReader("ab"))
+			lx.MustAddRule(lexTypeR, rule)
+
+			assertRetireStream(t, lx, []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString(lexTypeR, "ab", 0),
+			})
+		})
+	}
+}
+
+// TestStillActiveAtEOFRetiresRule: after the EOF symbol every rule that is still
+// active is retired, and the winner is chosen from the recorded accepts. A
+// sibling that never settles does not fail the token. See KD-4 in
+// docs/specs/core-contract.md; the single never-settling rule is the
+// TestLexerProcessor case "Rule Never Settles (UNKNOWN per rune)".
+func TestStillActiveAtEOFRetiresRule(t *testing.T) {
+	const (
+		lexTypeWord = textlexer.LexemeType("WORD")
+		lexTypeSib  = textlexer.LexemeType("SIB")
+	)
+
+	// alwaysContinue returns itself with StateContinue on every symbol, the EOF
+	// symbol included. It records no accept.
+	var alwaysContinue textlexer.Rule
+	alwaysContinue = func(textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		return alwaysContinue, textlexer.StateContinue
+	}
+
+	// alwaysAccept returns itself with StateAccept on every symbol. It records
+	// the accept of "ab"; its accept of the EOF symbol is discarded.
+	var alwaysAccept textlexer.Rule
+	alwaysAccept = func(textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		return alwaysAccept, textlexer.StateAccept
+	}
+
+	t.Run("StateContinue sibling", func(t *testing.T) {
+		lx := textlexer.New(strings.NewReader("ab"))
+		lx.MustAddRule(lexTypeSib, alwaysContinue)
+		lx.MustAddRule(lexTypeWord, newLettersRule())
+
+		assertRetireStream(t, lx, []*textlexer.Lexeme{
+			textlexer.NewLexemeFromString(lexTypeWord, "ab", 0),
+		})
+	})
+
+	t.Run("(self, StateAccept) sibling", func(t *testing.T) {
+		// SIB also records "ab", so the two rules tie and WORD, registered
+		// first, wins.
+		lx := textlexer.New(strings.NewReader("ab"))
+		lx.MustAddRule(lexTypeWord, newLettersRule())
+		lx.MustAddRule(lexTypeSib, alwaysAccept)
+
+		assertRetireStream(t, lx, []*textlexer.Lexeme{
+			textlexer.NewLexemeFromString(lexTypeWord, "ab", 0),
+		})
+	})
+
+	t.Run("(self, StateAccept) sibling registered first keeps its accept", func(t *testing.T) {
+		// Registered first, SIB wins the tie with the accept it recorded
+		// before the EOF symbol.
+		lx := textlexer.New(strings.NewReader("ab"))
+		lx.MustAddRule(lexTypeSib, alwaysAccept)
+		lx.MustAddRule(lexTypeWord, newLettersRule())
+
+		assertRetireStream(t, lx, []*textlexer.Lexeme{
+			textlexer.NewLexemeFromString(lexTypeSib, "ab", 0),
+		})
+	})
+}
+
+// alwaysPanic panics on every symbol it is shown.
+func alwaysPanic(textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+	panic("rule panicked")
+}
+
+// TestPanicRetiresRule: a rule that panics while it processes a symbol is
+// retired for the current token, as StateReject does, whether it panics on a
+// direct call or as the next rule of a pushback chain. The panic does not
+// reach the caller, Next returns no error, and a sibling rule's match is
+// emitted. See KD-2 in docs/specs/core-contract.md.
+func TestPanicRetiresRule(t *testing.T) {
+	const (
+		lexTypeWord = textlexer.LexemeType("WORD")
+		lexTypeBad  = textlexer.LexemeType("BAD")
+	)
+
+	// direct continues on its first symbol and panics on its second.
+	direct := func(textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		return alwaysPanic, textlexer.StateContinue
+	}
+
+	// chained continues on its first symbol. On its second it pushes back,
+	// and the next rule of the chain panics on the pushed-back symbol.
+	chained := func(textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		return func(textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+			return alwaysPanic, textlexer.StatePushBack
+		}, textlexer.StateContinue
+	}
+
+	for _, tc := range []struct {
+		name string
+		bad  textlexer.Rule
+	}{
+		{"direct", direct},
+		{"in a pushback chain", chained},
+	} {
+		t.Run(tc.name+", with a sibling", func(t *testing.T) {
+			// BAD is registered first, so it steps before WORD on each symbol.
+			lx := textlexer.New(strings.NewReader("ab"))
+			lx.MustAddRule(lexTypeBad, tc.bad)
+			lx.MustAddRule(lexTypeWord, newLettersRule())
+
+			assertRetireStream(t, lx, []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString(lexTypeWord, "ab", 0),
+			})
+		})
+
+		t.Run(tc.name+", sibling registered first", func(t *testing.T) {
+			lx := textlexer.New(strings.NewReader("ab"))
+			lx.MustAddRule(lexTypeWord, newLettersRule())
+			lx.MustAddRule(lexTypeBad, tc.bad)
+
+			assertRetireStream(t, lx, []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString(lexTypeWord, "ab", 0),
+			})
+		})
+
+		t.Run(tc.name+", only rule", func(t *testing.T) {
+			// BAD never accepts, so each token is one UNKNOWN rune. On the
+			// last rune its second symbol is the EOF symbol.
+			lx := textlexer.New(strings.NewReader("ab"))
+			lx.MustAddRule(lexTypeBad, tc.bad)
+
+			assertRetireStream(t, lx, unknownLexemes("ab", 0))
+		})
+	}
+}
+
+// TestPanicKeepsEarlierAccept: a rule accepts "a" and then panics on the next
+// symbol, directly or in a pushback chain. It has no sibling. Its earlier
+// accept stands, as for StateReject, so the first lexeme is that rule's "a".
+// The next token starts fresh: the rule rejects "b", which becomes UNKNOWN,
+// and then accepts the last "a" and panics on the EOF symbol.
+func TestPanicKeepsEarlierAccept(t *testing.T) {
+	const lexTypeA = textlexer.LexemeType("A")
+
+	panicNext := map[string]textlexer.Rule{
+		"direct": alwaysPanic,
+		"in a pushback chain": func(textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+			return alwaysPanic, textlexer.StatePushBack
+		},
+	}
+
+	for name, next := range panicNext {
+		t.Run(name, func(t *testing.T) {
+			acceptThenPanic := func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+				if s.Rune() == 'a' {
+					return next, textlexer.StateAccept
+				}
+				return nil, textlexer.StateReject
+			}
+
+			lx := textlexer.New(strings.NewReader("aba"))
+			lx.MustAddRule(lexTypeA, acceptThenPanic)
+
+			assertRetireStream(t, lx, []*textlexer.Lexeme{
+				textlexer.NewLexemeFromString(lexTypeA, "a", 0),
+				textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "b", 1),
+				textlexer.NewLexemeFromString(lexTypeA, "a", 2),
+			})
+		})
+	}
+}
+
+// TestPanicLeavesLexerUsable is the KD-2 probe from docs/specs/core-contract.md,
+// inverted. The input is longer than the cursor's retention budget
+// (WithMaxTokenBytes(8) gives 4 × 8 = 32 bytes), and the WORD rule panics once,
+// on the third symbol of the first token. The panic leaves no orphaned
+// checkpoint and loses no symbol: no later Next fails, and every input byte
+// appears in exactly one lexeme, in order.
+func TestPanicLeavesLexerUsable(t *testing.T) {
+	const (
+		lexTypeWord = textlexer.LexemeType("WORD")
+		lexTypeWS   = textlexer.LexemeType("WS")
+	)
+
+	input := "abcd " + strings.Repeat("ab ", 40)
+
+	panicked := false
+	var word func(depth int) textlexer.Rule
+	word = func(depth int) textlexer.Rule {
+		return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+			if depth == 2 && !panicked {
+				panicked = true
+				panic("third symbol")
+			}
+			if isLetter(s) {
+				return word(depth + 1), textlexer.StateAccept
+			}
+			return nil, textlexer.StateReject
+		}
+	}
+
+	lx := textlexer.NewWithOptions(strings.NewReader(input), textlexer.WithMaxTokenBytes(8))
+	lx.MustAddRule(lexTypeWord, word(0))
+	lx.MustAddRule(lexTypeWS, newWhitespaceRule())
+
+	// WORD recorded "ab" before it panicked on "c", so its accept stands. The
+	// next token starts at "c".
+	expected := []*textlexer.Lexeme{
+		textlexer.NewLexemeFromString(lexTypeWord, "ab", 0),
+		textlexer.NewLexemeFromString(lexTypeWord, "cd", 2),
+		textlexer.NewLexemeFromString(lexTypeWS, " ", 4),
+	}
+	for i := 0; i < 40; i++ {
+		expected = append(expected,
+			textlexer.NewLexemeFromString(lexTypeWord, "ab", 5+3*i),
+			textlexer.NewLexemeFromString(lexTypeWS, " ", 7+3*i),
+		)
+	}
+
+	assertRetireStream(t, lx, expected)
+	assert.True(t, panicked, "the WORD rule must have panicked")
+}
+
+// TestPanickingRuleConcurrentDeterminism: a rule that panics in every
+// identifier token does not break concurrent Next calls. Concurrent callers
+// interleave tokens, so, as in TestLexerConcurrentDeterminism, the lexemes are
+// collected in any order and sorted by offset to restore the stream order
+// before the full sequence is compared. Run with -race.
+func TestPanickingRuleConcurrentDeterminism(t *testing.T) {
+	const (
+		lexTypeBoom = textlexer.LexemeType("BOOM")
+		lexTypeID   = textlexer.LexemeType("ID")
+		lexTypeWS   = textlexer.LexemeType("WS")
+		numTokens   = 100
+	)
+
+	var b strings.Builder
+	var expected []*textlexer.Lexeme
+	for i := 0; i < numTokens; i++ {
+		id := fmt.Sprintf("id%d", i)
+		expected = append(expected,
+			textlexer.NewLexemeFromString(lexTypeID, id, b.Len()),
+			textlexer.NewLexemeFromString(lexTypeWS, " ", b.Len()+len(id)),
+		)
+		b.WriteString(id + " ")
+	}
+	input := b.String()
+
+	for run := 0; run < 3; run++ {
+		// BOOM accepts letters and panics on the first digit, so it panics
+		// once in every identifier token. Its accept of "id" stands, but ID's
+		// longer match wins.
+		var panics atomic.Int64
+		var boom textlexer.Rule
+		boom = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+			if isDigit(s) {
+				panics.Add(1)
+				panic("digit")
+			}
+			if isLetter(s) {
+				return boom, textlexer.StateAccept
+			}
+			return nil, textlexer.StateReject
+		}
+
+		lx := textlexer.New(strings.NewReader(input))
+		lx.MustAddRule(lexTypeBoom, boom)
+		lx.MustAddRule(lexTypeID, identifierRule)
+		lx.MustAddRule(lexTypeWS, whitespaceRule)
+
+		var (
+			mu     sync.Mutex
+			tokens []*textlexer.Lexeme
+			errs   []error
+			wg     sync.WaitGroup
+		)
+		for i := 0; i < 4; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for {
+					lex, err := lx.Next()
+					if err == io.EOF {
+						return
+					}
+					mu.Lock()
+					if err != nil {
+						errs = append(errs, err)
+						mu.Unlock()
+						return
+					}
+					tokens = append(tokens, lex)
+					mu.Unlock()
+				}
+			}()
+		}
+		wg.Wait()
+
+		require.Empty(t, errs, "run %d", run)
+		sort.Slice(tokens, func(i, j int) bool {
+			return tokens[i].Offset() < tokens[j].Offset()
+		})
+		assert.Equal(t, lexemeKeys(expected), lexemeKeys(tokens), "run %d", run)
+		assert.Equal(t, int64(numTokens), panics.Load(), "run %d", run)
+	}
 }
