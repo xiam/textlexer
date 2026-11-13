@@ -13,7 +13,7 @@
 // - `Lexeme`: A token with Type, Text, Offset, and Length.
 //
 // Key Test Philosophies:
-// 1.  Self-Contained: All lexical rules are implemented locally as test helpers (e.g., `matchString`,
+// 1.  Self-Contained: All lexical rules are implemented locally as test helpers (e.g., `newLiteralRule`,
 //     `newUnsignedFloatRule`) to eliminate external dependencies and keep tests readable and focused.
 // 2.  Adversarial Focus: A significant portion of the tests are designed to be adversarial, probing
 //     pathological behaviors and edge cases (e.g., zero-length matches, infinite loops, deep
@@ -30,8 +30,8 @@
 //   or badly-behaved rules designed to stress the state machine's logic.
 //
 // Common Patterns and Helpers:
-// - `matchString(s)`: Creates a rule that matches an exact string.
-// - `matchAnyOf(ss...)`: Creates a composite rule that matches any of the provided strings.
+// - `newLiteralRule(lit)`: A rule for an exact, non-empty literal.
+// - `newLiteralAlternationRule(lits...)`: A rule for the alternation of the given literals.
 // - `excludeLast(n, state)`: The verdict that excludes the last n symbols with n pushbacks,
 //   then ends the chain with the given state.
 // - Table-driven tests in `TestLexerProcessor` for basic functionality.
@@ -45,7 +45,7 @@
 // Guideline for Adding New Tests:
 // 1. For basic functionality: Add a case to the `testCases` slice in `TestLexerProcessor`.
 // 2. For adversarial testing: Add a `t.Run()` sub-test to `TestLexerPathologicalRules`.
-// 3. For new rule types: Create a helper function following the `new*Rule()` pattern.
+// 3. For new rule types: Follow docs/rule-authoring.md and add conformance cases (practice 9).
 // 4. Always verify both positive cases (expected tokens) and negative cases (error conditions).
 // 5. Include comments explaining the specific edge case or behavior being tested.
 
@@ -68,14 +68,27 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/xiam/textlexer"
+	"github.com/xiam/textreader"
 )
+
+// Shared rule helpers.
+//
+// Every rule in this package follows docs/rule-authoring.md. A constructor
+// newXxxRule returns the start state and its comment gives the regular
+// expression and the behaviour at end of input. States are named. Each
+// scanning state handles the EOF symbol first, decides with named predicates,
+// and ends with an explicit reject. Every pushback chain comes from
+// excludeLast. A rule keeps its state only in the Rule values it returns and
+// in immutable constructor parameters, so one Rule value can be registered on
+// any number of lexers.
 
 // excludeLast returns the verdict of a rule that excludes the last n symbols
 // (n >= 1) from its match and then ends the pushback chain with (nil, s). It
 // issues n StatePushBack verdicts in total: the returned one, and n-1 more from
 // the Rule it returns. The first pushback removes the symbol that was just read
-// (at end of input, the EOF symbol). See "Rule states and pushback" in
-// docs/specs/core-contract.md.
+// (at end of input, the EOF symbol). It is the only way a rule in this package
+// builds a pushback chain. See "Rule states and pushback" in
+// docs/specs/core-contract.md and practice 5 in docs/rule-authoring.md.
 func excludeLast(n int, s textlexer.State) (textlexer.Rule, textlexer.State) {
 	if n < 1 {
 		panic("excludeLast: n must be at least 1")
@@ -83,11 +96,13 @@ func excludeLast(n int, s textlexer.State) (textlexer.Rule, textlexer.State) {
 	return pushBackChain(n-1, s), textlexer.StatePushBack
 }
 
-// pushBackChain returns a Rule that issues n more StatePushBack verdicts and
-// then returns (nil, s). Entered through one StatePushBack, it excludes n+1
-// symbols; excludeLast states the total count directly.
+// pushBackChain returns the pushback-chain callback that issues n more
+// StatePushBack verdicts and then returns (nil, s). It ignores the symbol it
+// is shown, which at end of input can be the EOF symbol: that symbol is
+// already excluded from the match. Entered through one StatePushBack, it
+// excludes n+1 symbols; excludeLast states the total count directly.
 func pushBackChain(n int, s textlexer.State) textlexer.Rule {
-	return func(sym textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+	return func(textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 		if n > 0 {
 			return pushBackChain(n-1, s), textlexer.StatePushBack
 		}
@@ -99,6 +114,10 @@ func pushBackChain(n int, s textlexer.State) textlexer.Rule {
 // from it, has been invoked more than budget times in total. It bounds a test
 // by work instead of by wall-clock time: a lexer that stops terminating keeps
 // invoking its rules, and the invocation that exceeds the budget fails the test.
+//
+// Engine probe: boundedRule counts calls in a captured variable and fails the
+// test from inside a rule on purpose (breaks practices 4 and 6). It is test
+// instrumentation around a rule, not a rule.
 //
 // The wrapped rule runs inside Next, so the test must call Next on the test
 // goroutine; t.Fatalf is then legal there. callRule recovers panics but not
@@ -124,219 +143,252 @@ func boundedRule(t testing.TB, budget int, r textlexer.Rule) textlexer.Rule {
 	return wrap(r)
 }
 
-// matchString is a test helper that creates a simple Rule to match an exact string.
-func matchString(s string) textlexer.Rule {
-	var ruleFor func(sub string) textlexer.Rule
-	ruleFor = func(sub string) textlexer.Rule {
-		return func(sym textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-			runes := []rune(sub)
-			if sym.Rune() != runes[0] {
-				return nil, textlexer.StateReject
-			}
-			if len(runes) == 1 {
-				return nil, textlexer.StateAccept
-			}
-			return ruleFor(string(runes[1:])), textlexer.StateContinue
-		}
-	}
-	if s == "" {
-		return func(sym textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-			return nil, textlexer.StateAccept
-		}
-	}
-	return ruleFor(s)
-}
+// Rune predicates. The names say whether a class is ASCII-only or Unicode.
 
-// matchAnyOf creates a single composite rule that matches any of the provided strings.
-func matchAnyOf(ss ...string) textlexer.Rule {
-	type scanner struct {
-		rule textlexer.Rule
-	}
+// isASCIIDigit reports whether r is in [0-9].
+func isASCIIDigit(r rune) bool { return r >= '0' && r <= '9' }
 
-	return func(sym textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		var activeScanners []*scanner
-		var overallState textlexer.State = textlexer.StateReject
-
-		for _, s := range ss {
-			if len(s) > 0 && rune(s[0]) == sym.Rune() {
-				nextRule := matchString(s[1:])
-				activeScanners = append(activeScanners, &scanner{rule: nextRule})
-
-				if len(s) == 1 {
-					overallState = textlexer.StateAccept
-				} else {
-					if overallState != textlexer.StateAccept {
-						overallState = textlexer.StateContinue
-					}
-				}
-			}
-		}
-
-		if len(activeScanners) == 0 {
-			return nil, textlexer.StateReject
-		}
-
-		var nextCompositeRule textlexer.Rule
-		nextCompositeRule = func(nextSym textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-			var nextActiveScanners []*scanner
-			var nextOverallState textlexer.State = textlexer.StateReject
-
-			for _, sc := range activeScanners {
-				// Defensive check: A completed sub-match might have a nil rule.
-				if sc.rule == nil {
-					continue
-				}
-
-				nextRule, state := sc.rule(nextSym)
-				if state != textlexer.StateReject {
-					// *** FIX: Only add a scanner to the next state if its rule is not nil. ***
-					// This prevents a nil dereference on the next symbol.
-					if nextRule != nil {
-						nextActiveScanners = append(nextActiveScanners, &scanner{rule: nextRule})
-					}
-
-					if state == textlexer.StateAccept {
-						nextOverallState = textlexer.StateAccept
-					} else if nextOverallState != textlexer.StateAccept {
-						nextOverallState = textlexer.StateContinue
-					}
-				}
-			}
-
-			if len(nextActiveScanners) == 0 {
-				// If no scanners can continue, the composite rule is done.
-				// Return nil for the next rule. The overall state (Accept/Reject)
-				// will be determined by what was last seen.
-				return nil, nextOverallState
-			}
-			activeScanners = nextActiveScanners
-			return nextCompositeRule, nextOverallState
-		}
-
-		return nextCompositeRule, overallState
-	}
-}
-
-func isWhitespace(s textlexer.Symbol) bool {
-	r := s.Rune()
-	return r == ' ' || r == '\t' || r == '\n' || r == '\r'
-}
-
-func isDigit(s textlexer.Symbol) bool {
-	r := s.Rune()
-	return r >= '0' && r <= '9'
-}
-
-func isLetter(s textlexer.Symbol) bool {
-	r := s.Rune()
+// isASCIILetter reports whether r is in [A-Za-z].
+func isASCIILetter(r rune) bool {
 	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
 }
 
+// isASCIILowercase reports whether r is in [a-z].
+func isASCIILowercase(r rune) bool { return r >= 'a' && r <= 'z' }
+
+// isAOrB reports whether r is in [ab].
+func isAOrB(r rune) bool { return r == 'a' || r == 'b' }
+
+// isASCIIWord reports whether r is in \w, which is ASCII-only: [0-9A-Za-z_].
+func isASCIIWord(r rune) bool {
+	return r == '_' || isASCIIDigit(r) || isASCIILetter(r)
+}
+
+// isASCIIWhitespace reports whether r is in [ \t\n\r].
+func isASCIIWhitespace(r rune) bool {
+	return r == ' ' || r == '\t' || r == '\n' || r == '\r'
+}
+
+// isASCIISymbol reports whether r is in [-+*/=;()].
+func isASCIISymbol(r rune) bool {
+	switch r {
+	case '+', '-', '*', '/', '=', ';', '(', ')':
+		return true
+	}
+	return false
+}
+
+// isNotNewline reports whether r is in . without the s flag: any rune but '\n'.
+func isNotNewline(r rune) bool { return r != '\n' }
+
+// isAnyRune reports whether r is in . with the s flag: every rune.
+func isAnyRune(rune) bool { return true }
+
+// newRunePlusRule returns a rule for X+, where inClass reports whether a rune
+// is in X. It accepts after each rune of X. At end of input it rejects the EOF
+// symbol, so the run read so far stays the match.
+func newRunePlusRule(inClass func(rune) bool) textlexer.Rule {
+	var loop textlexer.Rule
+	loop = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
+		if inClass(s.Rune()) {
+			return loop, textlexer.StateAccept
+		}
+		return nil, textlexer.StateReject
+	}
+	return loop
+}
+
+// newLiteralRule returns a rule for the literal lit, which must not be empty.
+// It accepts at the last rune of lit and stops. At end of input before that
+// rune it rejects the EOF symbol, so it matches nothing.
+func newLiteralRule(lit string) textlexer.Rule {
+	if lit == "" {
+		panic("newLiteralRule: lit must not be empty")
+	}
+	return literalAt([]rune(lit), 0)
+}
+
+// literalAt is the state of newLiteralRule that reads rune i of lit.
+func literalAt(lit []rune, i int) textlexer.Rule {
+	return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
+		if s.Rune() == lit[i] {
+			if i == len(lit)-1 {
+				return nil, textlexer.StateAccept
+			}
+			return literalAt(lit, i+1), textlexer.StateContinue
+		}
+		return nil, textlexer.StateReject
+	}
+}
+
+// newLiteralAlternationRule returns a rule for the alternation s1|s2|... of
+// the given literals, matched rune by rune; empty literals are ignored. A
+// literal that is a prefix of a longer one accepts at its own last rune, and
+// the rule continues only while a longer literal can still match. At end of
+// input it rejects the EOF symbol, so the longest literal read so far stays
+// the match.
+func newLiteralAlternationRule(literals ...string) textlexer.Rule {
+	var candidates [][]rune
+	for _, lit := range literals {
+		if lit != "" {
+			candidates = append(candidates, []rune(lit))
+		}
+	}
+	return literalAlternationAt(candidates, 0)
+}
+
+// literalAlternationAt is the state of newLiteralAlternationRule that reads
+// rune i of each candidate. A candidate that ends at rune i accepts; a longer
+// candidate continues in the next state.
+func literalAlternationAt(candidates [][]rune, i int) textlexer.Rule {
+	return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
+
+		endsHere := false
+		var longer [][]rune
+		for _, c := range candidates {
+			if c[i] != s.Rune() {
+				continue
+			}
+			if len(c) == i+1 {
+				endsHere = true
+			} else {
+				longer = append(longer, c)
+			}
+		}
+
+		var next textlexer.Rule
+		if len(longer) > 0 {
+			next = literalAlternationAt(longer, i+1)
+		}
+
+		switch {
+		case endsHere:
+			return next, textlexer.StateAccept
+		case next != nil:
+			return next, textlexer.StateContinue
+		}
+		return nil, textlexer.StateReject
+	}
+}
+
+// newLiteralThenRule returns a rule fragment that continues over the runes of
+// lit without accepting and hands the symbol after them to then. Any other
+// symbol, and the EOF symbol, rejects. With an empty lit it returns then.
+func newLiteralThenRule(lit string, then textlexer.Rule) textlexer.Rule {
+	return literalThenAt([]rune(lit), 0, then)
+}
+
+// literalThenAt is the state of newLiteralThenRule that reads rune i of lit.
+func literalThenAt(lit []rune, i int, then textlexer.Rule) textlexer.Rule {
+	if i == len(lit) {
+		return then
+	}
+	return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
+		if s.Rune() == lit[i] {
+			return literalThenAt(lit, i+1, then), textlexer.StateContinue
+		}
+		return nil, textlexer.StateReject
+	}
+}
+
+// newKeywordRule returns a rule for keyword(?!W), in Perl notation, where
+// continuesWord reports whether a rune is in W: the keyword matches only when
+// the symbol after it cannot continue a word. It decides by one symbol of
+// lookahead and never accepts before it has decided. At end of input after
+// the keyword it excludes the EOF symbol and accepts the keyword.
+func newKeywordRule(keyword string, continuesWord func(rune) bool) textlexer.Rule {
+	return newLiteralThenRule(keyword, keywordEnd(continuesWord))
+}
+
+// keywordEnd is the state of newKeywordRule after the keyword.
+func keywordEnd(continuesWord func(rune) bool) textlexer.Rule {
+	return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return excludeLast(1, textlexer.StateAccept) // the EOF symbol
+		}
+		if continuesWord(s.Rune()) {
+			return nil, textlexer.StateReject
+		}
+		return excludeLast(1, textlexer.StateAccept) // the symbol after the keyword
+	}
+}
+
+// newWhitespaceRule returns a rule for [ \t\n\r]+. It accepts after each
+// whitespace rune. At end of input it rejects the EOF symbol, so the run read
+// so far stays the match.
 func newWhitespaceRule() textlexer.Rule {
-	var loop textlexer.Rule
-	loop = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		if isWhitespace(s) {
-			return loop, textlexer.StateAccept
-		}
-		return nil, textlexer.StateReject
-	}
-	return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		if isWhitespace(s) {
-			return loop, textlexer.StateAccept
-		}
-		return nil, textlexer.StateReject
-	}
+	return newRunePlusRule(isASCIIWhitespace)
 }
 
+// newUnsignedIntegerRule returns a rule for [0-9]+. It accepts after each
+// digit. At end of input it rejects the EOF symbol, so the digits read so far
+// stay the match.
 func newUnsignedIntegerRule() textlexer.Rule {
-	var loop textlexer.Rule
-	loop = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		if isDigit(s) {
-			return loop, textlexer.StateAccept
-		}
-		return nil, textlexer.StateReject
-	}
-	return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		if isDigit(s) {
-			return loop, textlexer.StateAccept
-		}
-		return nil, textlexer.StateReject
-	}
+	return newRunePlusRule(isASCIIDigit)
 }
 
+// newASCIILettersRule returns a rule for [A-Za-z]+. It accepts after each
+// letter. At end of input it rejects the EOF symbol, so the letters read so far
+// stay the match.
+func newASCIILettersRule() textlexer.Rule {
+	return newRunePlusRule(isASCIILetter)
+}
+
+// newIdentifierRule returns a rule for [A-Za-z_][A-Za-z0-9_]*. It accepts after
+// each rune. At end of input it rejects the EOF symbol, so the identifier read
+// so far stays the match.
 func newIdentifierRule() textlexer.Rule {
-	var loop textlexer.Rule
-	loop = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		r := s.Rune()
-		if isLetter(s) || isDigit(s) || r == '_' {
-			return loop, textlexer.StateAccept
+	var start, rest textlexer.Rule
+	start = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
+		if r := s.Rune(); isASCIILetter(r) || r == '_' {
+			return rest, textlexer.StateAccept
 		}
 		return nil, textlexer.StateReject
 	}
-	return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		r := s.Rune()
-		if isLetter(s) || r == '_' {
-			return loop, textlexer.StateAccept
+	rest = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
+		if isASCIIWord(s.Rune()) {
+			return rest, textlexer.StateAccept
 		}
 		return nil, textlexer.StateReject
 	}
+	return start
 }
 
-// newUnsignedFloatRule matches "1.5", "1." and ".5". It decides by lookahead: it
-// returns StateContinue until it reads the first symbol that cannot extend the
-// float, then excludes that one symbol (the EOF symbol at end of input) and
+// newUnsignedFloatRule returns a rule for [0-9]+\.(?!\.)[0-9]*|\.[0-9]+, in
+// Perl notation: "1.5", "1." and ".5", but not the "1." of the range "1..5".
+// It decides by lookahead: it returns StateContinue until it reads the first
+// symbol that cannot extend the float, then excludes that one symbol and
 // accepts. It never accepts before that, because a rule's recorded match only
-// grows within a token, so a pushback could not shorten an earlier accept.
+// grows within a token, so a pushback could not shorten an earlier accept. At
+// end of input after the radix point or in the fraction, it excludes the EOF
+// symbol and accepts; in any other state it rejects the EOF symbol.
 func newUnsignedFloatRule() textlexer.Rule {
 	var start, integerPart, afterInitialRadix, afterIntegerRadix, fractionalPart textlexer.Rule
 
-	// Exclude the symbol just read, which ends the float, and accept the rest.
-	pushBackAndAccept := func(_ textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		return excludeLast(1, textlexer.StateAccept)
-	}
-
-	// State for matching digits after a decimal point.
-	fractionalPart = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		if isDigit(s) {
-			return fractionalPart, textlexer.StateContinue
-		}
-		return pushBackAndAccept(s)
-	}
-
-	// State after a radix point that followed an integer part (e.g., after "123.").
-	afterIntegerRadix = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		if isDigit(s) {
-			return fractionalPart, textlexer.StateContinue
-		}
-		if s.Rune() == '.' {
-			// A second radix point: "1.." starts a range, so "1." is not a float.
+	// start reads the first rune: a digit or a radix point.
+	start = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
 			return nil, textlexer.StateReject
 		}
-		return pushBackAndAccept(s)
-	}
-
-	// State after a radix point was the *first* character. A fractional part is required.
-	afterInitialRadix = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		if isDigit(s) {
-			return fractionalPart, textlexer.StateContinue
-		}
-		return nil, textlexer.StateReject
-	}
-
-	// State for matching the initial integer part. This is NOT a float yet, and
-	// neither is the integer part followed by '.': afterIntegerRadix decides.
-	integerPart = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		if isDigit(s) {
-			return integerPart, textlexer.StateContinue
-		}
-		if s.Rune() == '.' {
-			return afterIntegerRadix, textlexer.StateContinue
-		}
-		return nil, textlexer.StateReject
-	}
-
-	start = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		if isDigit(s) {
+		if isASCIIDigit(s.Rune()) {
 			return integerPart, textlexer.StateContinue
 		}
 		if s.Rune() == '.' {
@@ -345,86 +397,245 @@ func newUnsignedFloatRule() textlexer.Rule {
 		return nil, textlexer.StateReject
 	}
 
+	// integerPart reads the integer part. It is not a float yet, and neither
+	// is the integer part followed by '.': afterIntegerRadix decides.
+	integerPart = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
+		if isASCIIDigit(s.Rune()) {
+			return integerPart, textlexer.StateContinue
+		}
+		if s.Rune() == '.' {
+			return afterIntegerRadix, textlexer.StateContinue
+		}
+		return nil, textlexer.StateReject
+	}
+
+	// afterIntegerRadix follows a radix point after an integer part ("123.").
+	afterIntegerRadix = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return excludeLast(1, textlexer.StateAccept) // the EOF symbol
+		}
+		if isASCIIDigit(s.Rune()) {
+			return fractionalPart, textlexer.StateContinue
+		}
+		if s.Rune() == '.' {
+			// A second radix point: "1.." starts a range, so "1." is not a float.
+			return nil, textlexer.StateReject
+		}
+		return excludeLast(1, textlexer.StateAccept) // the symbol after the radix point
+	}
+
+	// afterInitialRadix follows a radix point that was the first rune. A
+	// fractional part is required.
+	afterInitialRadix = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
+		if isASCIIDigit(s.Rune()) {
+			return fractionalPart, textlexer.StateContinue
+		}
+		return nil, textlexer.StateReject
+	}
+
+	// fractionalPart reads the digits after the radix point.
+	fractionalPart = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return excludeLast(1, textlexer.StateAccept) // the EOF symbol
+		}
+		if isASCIIDigit(s.Rune()) {
+			return fractionalPart, textlexer.StateContinue
+		}
+		return excludeLast(1, textlexer.StateAccept) // the symbol after the fraction
+	}
+
 	return start
 }
 
+// newSignedIntegerRule returns a rule for [+-]?[0-9]+. It accepts after each
+// digit. At end of input it rejects the EOF symbol, so after a sign alone it
+// matches nothing, and after digits the digits read so far stay the match.
 func newSignedIntegerRule() textlexer.Rule {
-	var start, loop textlexer.Rule
-	loop = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		if isDigit(s) {
-			return loop, textlexer.StateAccept
+	var start, digits textlexer.Rule
+	start = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
+		if r := s.Rune(); r == '+' || r == '-' {
+			// A sign must be followed by at least one digit.
+			return digits, textlexer.StateContinue
+		}
+		if isASCIIDigit(s.Rune()) {
+			return digits, textlexer.StateAccept
 		}
 		return nil, textlexer.StateReject
 	}
-	start = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		r := s.Rune()
-		if r == '+' || r == '-' {
-			// A sign must be followed by at least one digit.
-			return loop, textlexer.StateContinue
+	digits = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
 		}
-		if isDigit(s) {
-			return loop, textlexer.StateAccept
+		if isASCIIDigit(s.Rune()) {
+			return digits, textlexer.StateAccept
 		}
 		return nil, textlexer.StateReject
 	}
 	return start
 }
 
+// newSymbolRule returns a rule for [-+*/=;()]: one operator or punctuation
+// rune. At end of input it rejects the EOF symbol.
 func newSymbolRule() textlexer.Rule {
 	return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		switch s.Rune() {
-		case '+', '-', '*', '/', '=', ';', '(', ')':
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
+		if isASCIISymbol(s.Rune()) {
 			return nil, textlexer.StateAccept
 		}
 		return nil, textlexer.StateReject
 	}
 }
 
+// newSingleQuotedStringRule returns a rule for '[^']*': a single-quoted string
+// with no escapes, newlines included. It accepts at the closing quote and
+// stops. At end of input inside the string it rejects the EOF symbol, so an
+// unterminated string matches nothing.
 func newSingleQuotedStringRule() textlexer.Rule {
-	var loop, afterQuote textlexer.Rule
-	loop = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		if s.Rune() == '\'' {
-			return afterQuote, textlexer.StateAccept
+	var start, body textlexer.Rule
+	start = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
 		}
-		// Note: This simple version doesn't handle escaped quotes.
-		return loop, textlexer.StateContinue
-	}
-	afterQuote = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		return nil, textlexer.StateReject
-	}
-	return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 		if s.Rune() == '\'' {
-			return loop, textlexer.StateContinue
+			return body, textlexer.StateContinue
 		}
 		return nil, textlexer.StateReject
 	}
+	body = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
+		if s.Rune() == '\'' {
+			return nil, textlexer.StateAccept
+		}
+		if isAnyRune(s.Rune()) {
+			return body, textlexer.StateContinue
+		}
+		return nil, textlexer.StateReject
+	}
+	return start
 }
 
+// newSlashStarCommentRule returns a rule for (?s)/\*(?:[^*]|\*[^/])*\*/: a
+// comment that ends at the first "*/". A '*' in the body consumes the rune
+// after it unless that rune is '/', so "/***/" does not match. It accepts at
+// the closing '/' and stops. At end of input inside the comment it rejects the
+// EOF symbol, so an unterminated comment matches nothing.
 func newSlashStarCommentRule() textlexer.Rule {
-	var inComment, afterStar textlexer.Rule
-	inComment = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+	var start, afterSlash, body, afterStar textlexer.Rule
+	start = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
+		if s.Rune() == '/' {
+			return afterSlash, textlexer.StateContinue
+		}
+		return nil, textlexer.StateReject
+	}
+	afterSlash = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
+		if s.Rune() == '*' {
+			return body, textlexer.StateContinue
+		}
+		return nil, textlexer.StateReject
+	}
+	body = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
 		if s.Rune() == '*' {
 			return afterStar, textlexer.StateContinue
 		}
-		return inComment, textlexer.StateContinue
-	}
-	afterStar = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		if s.Rune() == '/' {
-			return nil, textlexer.StateAccept
-		}
-		return inComment, textlexer.StateContinue
-	}
-	return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		if s.Rune() == '/' {
-			return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-				if s.Rune() == '*' {
-					return inComment, textlexer.StateContinue
-				}
-				return nil, textlexer.StateReject
-			}, textlexer.StateContinue
+		if isAnyRune(s.Rune()) {
+			return body, textlexer.StateContinue
 		}
 		return nil, textlexer.StateReject
 	}
+	afterStar = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
+		if s.Rune() == '/' {
+			return nil, textlexer.StateAccept
+		}
+		if isAnyRune(s.Rune()) {
+			return body, textlexer.StateContinue
+		}
+		return nil, textlexer.StateReject
+	}
+	return start
+}
+
+// newBOLCommentRule returns a rule for (?m)^#[^\n]*: a '#' at the beginning of
+// a line and the rest of that line, without the line end. It decides by
+// lookahead: it continues until the line end or the EOF symbol, then excludes
+// that one symbol and accepts. At end of input it excludes the EOF symbol and
+// accepts the comment read so far.
+func newBOLCommentRule() textlexer.Rule {
+	var start, body textlexer.Rule
+	start = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
+		if s.IsBOL() && s.Rune() == '#' {
+			return body, textlexer.StateContinue
+		}
+		return nil, textlexer.StateReject
+	}
+	body = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return excludeLast(1, textlexer.StateAccept) // the EOF symbol
+		}
+		if isNotNewline(s.Rune()) {
+			return body, textlexer.StateContinue
+		}
+		if s.IsEOL() {
+			return excludeLast(1, textlexer.StateAccept) // the line end
+		}
+		return nil, textlexer.StateReject
+	}
+	return start
+}
+
+// newLettersAtEndRule returns a rule for [A-Za-z]+\z: a run of ASCII letters
+// that ends the input. It is the worked example of practice 5 in
+// docs/rule-authoring.md. It waits for the EOF symbol and never accepts a
+// letter. At end of input after a letter it excludes the EOF symbol and
+// accepts the letters; any other symbol after a letter rejects.
+func newLettersAtEndRule() textlexer.Rule {
+	var start, letters textlexer.Rule
+	start = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
+		if isASCIILetter(s.Rune()) {
+			return letters, textlexer.StateContinue
+		}
+		return nil, textlexer.StateReject
+	}
+	letters = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return excludeLast(1, textlexer.StateAccept) // the EOF symbol
+		}
+		if isASCIILetter(s.Rune()) {
+			return letters, textlexer.StateContinue
+		}
+		return nil, textlexer.StateReject
+	}
+	return start
 }
 
 // A mock reader that fails N times before succeeding.
@@ -448,6 +659,33 @@ var (
 	unsignedFloatRule   = newUnsignedFloatRule()
 	identifierRule      = newIdentifierRule()
 )
+
+// newABeforeAnySymbolRule returns a rule for a(?=.|\z), in Perl notation: an
+// 'a' followed by any symbol. It decides by one symbol of lookahead and never
+// accepts before it has decided. At end of input after the 'a' it excludes the
+// EOF symbol and accepts the 'a'.
+func newABeforeAnySymbolRule() textlexer.Rule {
+	var start, afterA textlexer.Rule
+	start = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
+		if s.Rune() == 'a' {
+			return afterA, textlexer.StateContinue
+		}
+		return nil, textlexer.StateReject
+	}
+	afterA = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return excludeLast(1, textlexer.StateAccept) // the EOF symbol
+		}
+		if isAnyRune(s.Rune()) {
+			return excludeLast(1, textlexer.StateAccept) // the symbol after the 'a'
+		}
+		return nil, textlexer.StateReject
+	}
+	return start
+}
 
 func TestLexerProcessor(t *testing.T) {
 	const (
@@ -495,32 +733,12 @@ func TestLexerProcessor(t *testing.T) {
 			name:  "Context-Aware Rules (BOL)",
 			input: "  # not a comment\n# a comment",
 			setupRules: func(lx *textlexer.TextLexer) {
-				commentRule := func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-					// This comment rule only matches '#' if it's at the beginning of a line.
-					if !s.IsBOL() || s.Rune() != '#' {
-						return nil, textlexer.StateReject
-					}
-
-					// This rule is returned after we see a terminator. It ignores its input
-					// and just signals acceptance. This prevents a recursive pushback.
-					acceptorRule := func(_ textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-						return nil, textlexer.StateAccept
-					}
-
-					var loop textlexer.Rule
-					loop = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-						// Consume until EOL or EOF, then pushback to not include the terminator.
-						if s.IsEOL() || s.IsEOF() {
-							return acceptorRule, textlexer.StatePushBack
-						}
-						return loop, textlexer.StateContinue
-					}
-					// Accept the '#' itself.
-					return loop, textlexer.StateAccept
-				}
-				lx.MustAddRule(lexTypeComment, commentRule)
+				// The comment rule matches '#' only at the beginning of a line,
+				// and pushes back its terminator so it is not included in the
+				// comment.
+				lx.MustAddRule(lexTypeComment, newBOLCommentRule())
 				lx.MustAddRule(lexTypeWhitespace, whitespaceRule)
-				lx.MustAddRule(lexTypeHash, matchString("#")) // Fallback for '#' not at BOL
+				lx.MustAddRule(lexTypeHash, newLiteralRule("#")) // Fallback for '#' not at BOL
 				lx.MustAddRule(lexTypeIdentifier, newIdentifierRule())
 			},
 			expectedLexemes: []*textlexer.Lexeme{
@@ -604,7 +822,7 @@ func TestLexerProcessor(t *testing.T) {
 			name:  "Rule Priority (Keyword vs Identifier)",
 			input: "if identifier",
 			setupRules: func(lx *textlexer.TextLexer) {
-				lx.MustAddRule(lexTypeKeywordIF, matchString("if"))
+				lx.MustAddRule(lexTypeKeywordIF, newLiteralRule("if"))
 				lx.MustAddRule(lexTypeIdentifier, identifierRule)
 				lx.MustAddRule(lexTypeWhitespace, whitespaceRule)
 			},
@@ -619,7 +837,7 @@ func TestLexerProcessor(t *testing.T) {
 			input: "if",
 			setupRules: func(lx *textlexer.TextLexer) {
 				lx.MustAddRule(lexTypeIdentifier, identifierRule)
-				lx.MustAddRule(lexTypeKeywordIF, matchString("if"))
+				lx.MustAddRule(lexTypeKeywordIF, newLiteralRule("if"))
 			},
 			expectedLexemes: []*textlexer.Lexeme{
 				textlexer.NewLexemeFromString(lexTypeIdentifier, "if", 0),
@@ -674,9 +892,9 @@ func TestLexerProcessor(t *testing.T) {
 			setupRules: func(lx *textlexer.TextLexer) {
 				lx.MustAddRule(textlexer.LexemeType("COMMENT"), newSlashStarCommentRule())
 				lx.MustAddRule(textlexer.LexemeType("STRING"), newSingleQuotedStringRule())
-				lx.MustAddRule(textlexer.LexemeType("SELECT"), matchString("SELECT"))
-				lx.MustAddRule(textlexer.LexemeType("FROM"), matchString("FROM"))
-				lx.MustAddRule(textlexer.LexemeType("WHERE"), matchString("WHERE"))
+				lx.MustAddRule(textlexer.LexemeType("SELECT"), newLiteralRule("SELECT"))
+				lx.MustAddRule(textlexer.LexemeType("FROM"), newLiteralRule("FROM"))
+				lx.MustAddRule(textlexer.LexemeType("WHERE"), newLiteralRule("WHERE"))
 				lx.MustAddRule(textlexer.LexemeType("IDENTIFIER"), newIdentifierRule())
 				lx.MustAddRule(textlexer.LexemeType("SYMBOL"), newSymbolRule()) // Catches *, =, ;
 				lx.MustAddRule(textlexer.LexemeType("WHITESPACE"), newWhitespaceRule())
@@ -716,6 +934,9 @@ func TestLexerProcessor(t *testing.T) {
 				// active at end of input. The VM retires it after the EOF
 				// symbol; with no recorded accept, each token is one UNKNOWN
 				// rune. Each token reads to the end of input first.
+				//
+				// Engine probe: never settles on purpose (breaks practices 2
+				// and 6).
 				var brokenRule textlexer.Rule
 				brokenRule = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 					return brokenRule, textlexer.StateContinue
@@ -736,6 +957,8 @@ func TestLexerProcessor(t *testing.T) {
 				// On 'a' the stack holds one symbol, and the rule tries to exclude
 				// three. The second pushback passes the bottom of the stack, so the
 				// VM retires the rule (processor.go:110) and no rule matches.
+				// Engine probe: excludes more symbols than it read on purpose
+				// (breaks practices 2 and 6).
 				pushbackRule := func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 					return excludeLast(3, textlexer.StateAccept)
 				}
@@ -769,6 +992,8 @@ func TestLexerProcessor(t *testing.T) {
 				// One pushback on the first symbol excludes it, so the accept has
 				// length 0. TestProcessZeroLengthMatch proves that the VM takes the
 				// zero-length branch (textlexer.go:482-485), not the no-match path.
+				// Engine probe: an empty match on purpose (breaks practices 2
+				// and 6).
 				zeroLengthRule := func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 					return excludeLast(1, textlexer.StateAccept)
 				}
@@ -783,6 +1008,8 @@ func TestLexerProcessor(t *testing.T) {
 			input: "abc",
 			setupRules: func(lx *textlexer.TextLexer) {
 				// This rule creates a loop by always pushing back and returning to itself.
+				// Engine probe: a hand-built chain that never ends, on purpose
+				// (breaks practices 2, 5 and 6).
 				var pushbackLoopRule textlexer.Rule
 				pushbackLoopRule = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 					return pushbackLoopRule, textlexer.StatePushBack
@@ -802,6 +1029,8 @@ func TestLexerProcessor(t *testing.T) {
 			setupRules: func(lx *textlexer.TextLexer) {
 				// The processor must handle an invalid (nil, StateContinue) return
 				// by deactivating the scanner to prevent undefined behavior.
+				// Engine probe: continues with no next state on purpose (breaks
+				// practices 2 and 6).
 				badRule := func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 					return nil, textlexer.StateContinue
 				}
@@ -816,6 +1045,8 @@ func TestLexerProcessor(t *testing.T) {
 			input: "ab",
 			setupRules: func(lx *textlexer.TextLexer) {
 				// Rule that continues without accepting, then hits EOF.
+				// Engine probe: still active at end of input on purpose (breaks
+				// practices 1, 2 and 6).
 				ruleAtEOF := func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 					if s.Rune() == 'a' {
 						return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
@@ -844,15 +1075,7 @@ func TestLexerProcessor(t *testing.T) {
 				// The rule continues at 'a' without accepting, so its only accept
 				// comes from the pushback: at end of input the first pushback
 				// removes the EOF symbol, which leaves "a" as the match.
-				pushbackAtEOF := func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-					if s.Rune() == 'a' {
-						return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-							return excludeLast(1, textlexer.StateAccept)
-						}, textlexer.StateContinue
-					}
-					return nil, textlexer.StateReject
-				}
-				lx.MustAddRule("PUSHBACK_EOF", pushbackAtEOF)
+				lx.MustAddRule("PUSHBACK_EOF", newABeforeAnySymbolRule())
 			},
 			expectedLexemes: []*textlexer.Lexeme{
 				textlexer.NewLexemeFromString(textlexer.LexemeType("PUSHBACK_EOF"), "a", 0),
@@ -864,6 +1087,8 @@ func TestLexerProcessor(t *testing.T) {
 			setupRules: func(lx *textlexer.TextLexer) {
 				// This test requires capturing the flags of each symbol as it is
 				// processed. The rule itself will perform the assertions.
+				// Engine probe: records every symbol it is shown on purpose
+				// (breaks practices 4 and 6).
 				var processedSymbols []textlexer.Symbol
 				var mu sync.Mutex
 
@@ -1037,13 +1262,7 @@ func TestLexerConcurrentAccess(t *testing.T) {
 	input := strings.Repeat("word ", numWords)
 	lx := textlexer.New(strings.NewReader(input))
 
-	wordOrSpaceRule := func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		if s.Rune() == 'w' {
-			return matchString("ord "), textlexer.StateContinue
-		}
-		return nil, textlexer.StateReject
-	}
-	lx.MustAddRule(lexTypeWord, wordOrSpaceRule)
+	lx.MustAddRule(lexTypeWord, newLiteralRule("word "))
 
 	var wg sync.WaitGroup
 	numGoroutines := 4
@@ -1198,6 +1417,7 @@ func TestLexerPanickingRuleIsRecoveredAndRetired(t *testing.T) {
 	const lexTypePanic = textlexer.LexemeType("PANIC")
 	input := "crash"
 
+	// Engine probe: panics on purpose (breaks practice 6).
 	panickingRule := func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 		panic("user rule panicked")
 	}
@@ -1219,6 +1439,8 @@ func TestLexerPanicRetiresRuleAndLexingContinues(t *testing.T) {
 	)
 	input := "panic normal"
 
+	// Engine probe: panics once, counted in a captured variable, on purpose
+	// (breaks practices 2, 3, 4 and 6).
 	panicCount := 0
 	recoveringPanicRule := func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 		r := s.Rune()
@@ -1337,7 +1559,7 @@ func TestLexerConcurrentAddRuleAndNext(t *testing.T) {
 
 	input := strings.Repeat("abc", 1000)
 	lx := textlexer.New(strings.NewReader(input))
-	lx.MustAddRule(lexTypeA, matchString("a"))
+	lx.MustAddRule(lexTypeA, newLiteralRule("a"))
 
 	lexingStarted := make(chan struct{})
 	addRuleDone := make(chan struct{})
@@ -1376,7 +1598,7 @@ func TestLexerConcurrentAddRuleAndNext(t *testing.T) {
 		defer close(addRuleDone)
 		<-lexingStarted
 
-		err := lx.AddRule(lexTypeB, matchString("b"))
+		err := lx.AddRule(lexTypeB, newLiteralRule("b"))
 		if err != nil {
 			mu.Lock()
 			if raceError == nil {
@@ -1385,7 +1607,7 @@ func TestLexerConcurrentAddRuleAndNext(t *testing.T) {
 			mu.Unlock()
 		}
 
-		err = lx.AddRule(lexTypeC, matchString("c"))
+		err = lx.AddRule(lexTypeC, newLiteralRule("c"))
 		if err != nil {
 			mu.Lock()
 			if raceError == nil {
@@ -1447,6 +1669,8 @@ func TestLexerPathologicalRuleWithDeepBacktracking(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			// Engine probe: accepts every 'a' eagerly and then ends with a
+			// shorter pushback chain, on purpose (breaks practices 2 and 5).
 			var pathologicalRule, finalState textlexer.Rule
 
 			// Excludes the EOF symbol, 'b', and backtrackDepth-1 of the 'a's.
@@ -1526,7 +1750,7 @@ func TestLexerWithManyRules(t *testing.T) {
 	for i := 0; i < numRules; i++ {
 		ruleText := fmt.Sprintf("id%d", i)
 		ruleType := textlexer.LexemeType(fmt.Sprintf("RULE_%d", i))
-		lx.MustAddRule(ruleType, matchString(ruleText))
+		lx.MustAddRule(ruleType, newLiteralRule(ruleText))
 	}
 	lx.MustAddRule("WS", whitespaceRule)
 
@@ -1578,6 +1802,9 @@ func TestLexerMaximumLimits(t *testing.T) {
 		// deepPushbackRule continues over every 'a' and, at end of input,
 		// excludes the last `exclude` symbols of the stack. The stack then holds
 		// maxPushback+10 'a's plus the EOF symbol.
+		//
+		// Engine probe: with exclude above the stack depth it passes the bottom
+		// of the stack on purpose (breaks practices 1, 2 and 6).
 		deepPushbackRule := func(exclude int) textlexer.Rule {
 			var loop textlexer.Rule
 			loop = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
@@ -1625,9 +1852,9 @@ func TestLexerMaximumLimits(t *testing.T) {
 		for i := 0; i < numRules; i++ {
 			ruleText := fmt.Sprintf("t%d", i)
 			ruleType := textlexer.LexemeType(fmt.Sprintf("RULE_%d", i))
-			lx.MustAddRule(ruleType, matchString(ruleText))
+			lx.MustAddRule(ruleType, newLiteralRule(ruleText))
 		}
-		lx.MustAddRule("TEST", matchString("test"))
+		lx.MustAddRule("TEST", newLiteralRule("test"))
 
 		lex, err := lx.Next()
 		require.NoError(t, err)
@@ -1656,6 +1883,9 @@ func TestLexerZeroLengthMatchPrevention(t *testing.T) {
 			// commits no empty token and emits one UNKNOWN rune instead
 			// (textlexer.go:482-485); TestProcessZeroLengthMatch proves the
 			// branch.
+			//
+			// Engine probe: an empty match on purpose (breaks practices 2 and
+			// 6).
 			zeroLengthRule := func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 				return excludeLast(1, textlexer.StateAccept)
 			}
@@ -1697,6 +1927,120 @@ func TestLexerZeroLengthMatchPrevention(t *testing.T) {
 
 // TestLexerPathologicalRules tests adversarial or badly-behaved rules to
 // ensure the state machine is robust.
+// newOddARunRule returns a rule for a(?:aa)*: a run of an odd number of 'a's.
+// It accepts after each odd 'a'. At end of input it rejects the EOF symbol, so
+// the longest odd run read so far stays the match.
+func newOddARunRule() textlexer.Rule {
+	var odd, even textlexer.Rule
+	odd = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
+		if s.Rune() == 'a' {
+			return even, textlexer.StateAccept
+		}
+		return nil, textlexer.StateReject
+	}
+	even = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
+		if s.Rune() == 'a' {
+			return odd, textlexer.StateContinue
+		}
+		return nil, textlexer.StateReject
+	}
+	return odd
+}
+
+// newEvenARunRule returns a rule for (?:aa)+: a run of an even number of 'a's.
+// It accepts after each even 'a'. At end of input it rejects the EOF symbol,
+// so the longest even run read so far stays the match.
+func newEvenARunRule() textlexer.Rule {
+	var odd, even textlexer.Rule
+	odd = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
+		if s.Rune() == 'a' {
+			return even, textlexer.StateContinue
+		}
+		return nil, textlexer.StateReject
+	}
+	even = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
+		if s.Rune() == 'a' {
+			return odd, textlexer.StateAccept
+		}
+		return nil, textlexer.StateReject
+	}
+	return odd
+}
+
+// newABCCycleRule returns a rule for (?:abc)*(?:abc|ab|a): a non-empty prefix
+// of "abcabc...". Its three states form a cycle, and it accepts after each
+// rune. At end of input it rejects the EOF symbol, so the prefix read so far
+// stays the match.
+func newABCCycleRule() textlexer.Rule {
+	var expectA, expectB, expectC textlexer.Rule
+	expectA = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
+		if s.Rune() == 'a' {
+			return expectB, textlexer.StateAccept
+		}
+		return nil, textlexer.StateReject
+	}
+	expectB = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
+		if s.Rune() == 'b' {
+			return expectC, textlexer.StateAccept
+		}
+		return nil, textlexer.StateReject
+	}
+	expectC = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
+		if s.Rune() == 'c' {
+			return expectA, textlexer.StateAccept
+		}
+		return nil, textlexer.StateReject
+	}
+	return expectA
+}
+
+// newARunUpToRule returns a rule for a{1,limit}, where limit >= 1. It accepts
+// after each 'a' and stops after limit of them. At end of input it rejects the
+// EOF symbol, so the run read so far stays the match.
+func newARunUpToRule(limit int) textlexer.Rule {
+	if limit < 1 {
+		panic("newARunUpToRule: limit must be at least 1")
+	}
+	return aRunAt(0, limit)
+}
+
+// aRunAt is the state of newARunUpToRule after n 'a's.
+func aRunAt(n, limit int) textlexer.Rule {
+	return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
+		if s.Rune() == 'a' {
+			if n+1 == limit {
+				return nil, textlexer.StateAccept
+			}
+			return aRunAt(n+1, limit), textlexer.StateAccept
+		}
+		return nil, textlexer.StateReject
+	}
+}
+
 func TestLexerPathologicalRules(t *testing.T) {
 	t.Run("Interleaving Longest Match", func(t *testing.T) {
 		// Ensures the processor tracks the longest match even when the winning rule alternates.
@@ -1707,37 +2051,9 @@ func TestLexerPathologicalRules(t *testing.T) {
 		)
 		input := "aaaaa"
 
-		var ruleA, ruleA_continue textlexer.Rule
-		ruleA = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-			if s.Rune() == 'a' {
-				return ruleA_continue, textlexer.StateAccept
-			}
-			return nil, textlexer.StateReject
-		}
-		ruleA_continue = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-			if s.Rune() == 'a' {
-				return ruleA, textlexer.StateContinue
-			}
-			return nil, textlexer.StateReject
-		}
-
-		var ruleB, ruleB_accept textlexer.Rule
-		ruleB = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-			if s.Rune() == 'a' {
-				return ruleB_accept, textlexer.StateContinue
-			}
-			return nil, textlexer.StateReject
-		}
-		ruleB_accept = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-			if s.Rune() == 'a' {
-				return ruleB, textlexer.StateAccept
-			}
-			return nil, textlexer.StateReject
-		}
-
 		lx := textlexer.New(strings.NewReader(input))
-		lx.MustAddRule(lexTypeOdd, ruleA)
-		lx.MustAddRule(lexTypeEven, ruleB)
+		lx.MustAddRule(lexTypeOdd, newOddARunRule())
+		lx.MustAddRule(lexTypeEven, newEvenARunRule())
 
 		// Expected: Rule A's lastAccept is 5, Rule B's is 4. The processor must pick the longest.
 		expected := []*textlexer.Lexeme{
@@ -1767,6 +2083,8 @@ func TestLexerPathologicalRules(t *testing.T) {
 		)
 		input := "token;"
 
+		// Engine probe: accepts eagerly and then ends with a shorter pushback
+		// chain, on purpose (breaks practices 1, 2 and 5).
 		var baitRule textlexer.Rule
 		baitFinalizer := func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 			if s.Rune() == ';' {
@@ -1808,7 +2126,7 @@ func TestLexerPathologicalRules(t *testing.T) {
 
 		lx := textlexer.New(strings.NewReader(input))
 		lx.MustAddRule(lexTypeBait, baitRule)
-		lx.MustAddRule(lexTypeHonest, matchString("token"))
+		lx.MustAddRule(lexTypeHonest, newLiteralRule("token"))
 
 		// Expected: Both rules achieve a maximal match of length 5. The Bait rule's
 		// attempt to backtrack to a shorter match is ignored. Since "Bait" was added
@@ -1839,6 +2157,8 @@ func TestLexerPathologicalRules(t *testing.T) {
 		)
 		input := "abc;"
 
+		// Engine probe: accepts eagerly while a lookahead decision is pending,
+		// on purpose (breaks practices 1, 2 and 5).
 		var vetoRule textlexer.Rule
 		vetoFinalizer := func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 			if s.Rune() == ';' {
@@ -1870,7 +2190,7 @@ func TestLexerPathologicalRules(t *testing.T) {
 
 		lx := textlexer.New(strings.NewReader(input))
 		lx.MustAddRule(lexTypeVeto, vetoRule)
-		lx.MustAddRule(lexTypeHonest, matchString("abc"))
+		lx.MustAddRule(lexTypeHonest, newLiteralRule("abc"))
 
 		// Expected: Both VETO and HONEST rules achieve a maximal match of length 3.
 		// The VETO rule's subsequent StateReject does not retroactively cancel
@@ -1898,6 +2218,8 @@ func TestLexerPathologicalRules(t *testing.T) {
 		const lexTypeBad = textlexer.LexemeType("BAD_PUSHBACK")
 		input := "ab"
 
+		// Engine probe: a pushback with no next rule, on purpose (breaks
+		// practices 1, 2 and 5).
 		badRule := func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 			if s.Rune() == 'a' {
 				return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
@@ -1911,7 +2233,7 @@ func TestLexerPathologicalRules(t *testing.T) {
 		lx := textlexer.New(strings.NewReader(input))
 		lx.MustAddRule(lexTypeBad, badRule)
 		// This honest rule will be chosen after the bad one deactivates.
-		lx.MustAddRule("A", matchString("a"))
+		lx.MustAddRule("A", newLiteralRule("a"))
 
 		expected := []*textlexer.Lexeme{
 			textlexer.NewLexemeFromString(textlexer.LexemeType("A"), "a", 0),
@@ -1934,6 +2256,8 @@ func TestLexerPathologicalRules(t *testing.T) {
 		const lexTypeReject = textlexer.LexemeType("REJECT")
 		input := "abc"
 
+		// Engine probe: rejects every symbol without a state of its own, on
+		// purpose, to pin the no-match path (breaks practices 1, 2 and 7).
 		alwaysRejectRule := func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 			return nil, textlexer.StateReject
 		}
@@ -1963,6 +2287,8 @@ func TestLexerPathologicalRules(t *testing.T) {
 		const lexTypeAccept = textlexer.LexemeType("ACCEPT")
 		input := "abc"
 
+		// Engine probe: accepts every symbol, the EOF symbol included, on
+		// purpose (breaks practice 2).
 		alwaysAcceptRule := func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 			return nil, textlexer.StateAccept
 		}
@@ -1994,6 +2320,8 @@ func TestLexerPathologicalRules(t *testing.T) {
 		const lexTypeExponential = textlexer.LexemeType("EXPONENTIAL")
 		input := strings.Repeat("a", 20) + "b"
 
+		// Engine probe: counts its calls in a captured variable on purpose
+		// (breaks practices 1, 2, 4 and 6).
 		callCount := 0
 		var exponentialRule textlexer.Rule
 		exponentialRule = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
@@ -2038,6 +2366,8 @@ func TestLexerPathologicalRules(t *testing.T) {
 		const lexTypeMemory = textlexer.LexemeType("MEMORY")
 		input := "start"
 
+		// Engine probe: allocates memory outside its returned rules on purpose
+		// (breaks practices 2, 3, 4 and 6).
 		var memoryTracker [][]byte
 		memoryExhaustionRule := func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 			if len(memoryTracker) < 10 { // Limit to prevent actual exhaustion in test.
@@ -2065,30 +2395,9 @@ func TestLexerPathologicalRules(t *testing.T) {
 		const lexTypeCycle = textlexer.LexemeType("CYCLE")
 		input := "abc"
 
-		var ruleA, ruleB, ruleC textlexer.Rule
-
-		// Create a cycle: A -> B -> C -> A
-		ruleA = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-			if s.Rune() == 'a' {
-				return ruleB, textlexer.StateAccept
-			}
-			return nil, textlexer.StateReject
-		}
-		ruleB = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-			if s.Rune() == 'b' {
-				return ruleC, textlexer.StateAccept
-			}
-			return nil, textlexer.StateReject
-		}
-		ruleC = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-			if s.Rune() == 'c' {
-				return ruleA, textlexer.StateAccept
-			}
-			return nil, textlexer.StateReject
-		}
-
+		// The rule's states form a cycle: a -> b -> c -> a.
 		lx := textlexer.New(strings.NewReader(input))
-		lx.MustAddRule(lexTypeCycle, ruleA)
+		lx.MustAddRule(lexTypeCycle, newABCCycleRule())
 
 		expected := []*textlexer.Lexeme{
 			textlexer.NewLexemeFromString(lexTypeCycle, "abc", 0),
@@ -2110,27 +2419,9 @@ func TestLexerPathologicalRules(t *testing.T) {
 		const lexTypeOverflow = textlexer.LexemeType("OVERFLOW")
 		input := strings.Repeat("a", 65536)
 
-		overflowRule := func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-			if s.Rune() == 'a' {
-				var deepChain func(int) textlexer.Rule
-				deepChain = func(depth int) textlexer.Rule {
-					if depth > 100 { // Limit depth for test.
-						return nil
-					}
-					return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-						if s.Rune() == 'a' {
-							return deepChain(depth + 1), textlexer.StateAccept
-						}
-						return nil, textlexer.StateReject
-					}
-				}
-				return deepChain(0), textlexer.StateAccept
-			}
-			return nil, textlexer.StateReject
-		}
-
+		// The rule stops after 102 'a's, so the input is many tokens.
 		lx := textlexer.New(strings.NewReader(input))
-		lx.MustAddRule(lexTypeOverflow, overflowRule)
+		lx.MustAddRule(lexTypeOverflow, newARunUpToRule(102))
 
 		tokenCount := 0
 		for {
@@ -2152,6 +2443,8 @@ func TestLexerPathologicalRules(t *testing.T) {
 
 		sharedCounter := int32(0)
 
+		// Engine probe: writes a shared counter on every call, on purpose
+		// (breaks practices 2, 3, 4 and 6).
 		var mutatingRule textlexer.Rule
 		mutatingRule = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 			atomic.AddInt32(&sharedCounter, 1)
@@ -2205,6 +2498,8 @@ func TestLexerChaos(t *testing.T) {
 
 	rng := mrand.New(mrand.NewSource(42))
 
+	// Engine probe: random verdicts and a captured counter, on purpose (breaks
+	// practices 2, 4, 5 and 6).
 	matchLength := 0
 	var chaosRule textlexer.Rule
 	chaosRule = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
@@ -2267,6 +2562,8 @@ func TestLexerChaos(t *testing.T) {
 // TestLexerInfiniteLoopProtection specifically tests that the lexer protects against
 // various types of infinite loops.
 func TestLexerInfiniteLoopProtection(t *testing.T) {
+	// Engine probes: each rule never settles or matches nothing, on purpose
+	// (breaks practices 1, 2, 5 and 6).
 	testCases := []struct {
 		name string
 		rule textlexer.Rule
@@ -2334,6 +2631,32 @@ func TestLexerInfiniteLoopProtection(t *testing.T) {
 	}
 }
 
+// newARunOfLengthRule returns a rule for a{n}, where n >= 1. It continues over
+// the first n-1 'a's and accepts at the n-th. At end of input before that it
+// rejects the EOF symbol, so it matches nothing.
+func newARunOfLengthRule(n int) textlexer.Rule {
+	if n < 1 {
+		panic("newARunOfLengthRule: n must be at least 1")
+	}
+	return aRunOfLengthAt(0, n)
+}
+
+// aRunOfLengthAt is the state of newARunOfLengthRule after read 'a's.
+func aRunOfLengthAt(read, n int) textlexer.Rule {
+	return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
+		if s.Rune() == 'a' {
+			if read+1 == n {
+				return nil, textlexer.StateAccept
+			}
+			return aRunOfLengthAt(read+1, n), textlexer.StateContinue
+		}
+		return nil, textlexer.StateReject
+	}
+}
+
 // TestLexerResourceExhaustion tests the lexer's handling of resource-intensive scenarios.
 func TestLexerResourceExhaustion(t *testing.T) {
 	t.Run("Stack Depth Exhaustion", func(t *testing.T) {
@@ -2342,25 +2665,9 @@ func TestLexerResourceExhaustion(t *testing.T) {
 		// StateContinue transitions.
 		const maxDepth = 10000
 
-		// This rule is implemented iteratively using a closure to track depth,
-		// making it stack-safe. This correctly tests the lexer's loop, not the
-		// Go runtime's stack limit.
-		stackSafeDeepRule := func() textlexer.Rule {
-			depth := 0
-			var ruleLoop textlexer.Rule
-
-			ruleLoop = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-				if s.Rune() != 'a' {
-					return nil, textlexer.StateReject
-				}
-				depth++
-				if depth >= maxDepth {
-					return nil, textlexer.StateAccept
-				}
-				return ruleLoop, textlexer.StateContinue
-			}
-			return ruleLoop
-		}
+		// The rule carries its depth in the Rule values it returns and never
+		// calls itself, so it is stack-safe. This tests the lexer's loop, not
+		// the Go runtime's stack limit.
 
 		input := strings.Repeat("a", maxDepth)
 		lx := textlexer.New(strings.NewReader(input))
@@ -2368,7 +2675,7 @@ func TestLexerResourceExhaustion(t *testing.T) {
 		// once more, so the run takes maxDepth+1 invocations. The budget
 		// doubles that; a lexer stuck in a loop exceeds it and fails the test.
 		budget := 2 * (maxDepth + 1)
-		lx.MustAddRule("DEEP", boundedRule(t, budget, stackSafeDeepRule()))
+		lx.MustAddRule("DEEP", boundedRule(t, budget, newARunOfLengthRule(maxDepth)))
 
 		// Next runs on the test goroutine, so a panic fails the test. A Go
 		// stack overflow is fatal and cannot be recovered in any case.
@@ -2434,16 +2741,9 @@ func TestLexerEdgeCasesAtEOF(t *testing.T) {
 	t.Run("Rule in StateAccept at EOF", func(t *testing.T) {
 		input := "test"
 
-		var greedyRule textlexer.Rule
-		greedyRule = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-			if s.Rune() >= 'a' && s.Rune() <= 'z' {
-				return greedyRule, textlexer.StateAccept
-			}
-			return nil, textlexer.StateReject
-		}
-
+		// The rule accepts after each lowercase letter, up to end of input.
 		lx := textlexer.New(strings.NewReader(input))
-		lx.MustAddRule("GREEDY", greedyRule)
+		lx.MustAddRule("GREEDY", newRunePlusRule(isASCIILowercase))
 
 		lex, err := lx.Next()
 		require.NoError(t, err)
@@ -2457,6 +2757,8 @@ func TestLexerEdgeCasesAtEOF(t *testing.T) {
 		input := "ab"
 
 		// Rule A accepts 'a', continues on 'b', but never accepts the final state.
+		// Engine probe: still active at end of input on purpose (breaks
+		// practices 1, 2 and 6).
 		ruleA := func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 			if s.Rune() == 'a' {
 				return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
@@ -2472,18 +2774,9 @@ func TestLexerEdgeCasesAtEOF(t *testing.T) {
 		}
 
 		// Rule B accepts both 'a' and 'b'.
-		var ruleB textlexer.Rule
-		ruleB = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-			r := s.Rune()
-			if r == 'a' || r == 'b' {
-				return ruleB, textlexer.StateAccept
-			}
-			return nil, textlexer.StateReject
-		}
-
 		lx := textlexer.New(strings.NewReader(input))
 		lx.MustAddRule("A", ruleA)
-		lx.MustAddRule("B", ruleB)
+		lx.MustAddRule("B", newRunePlusRule(isAOrB))
 
 		// Rule B should win with "ab" since its accepted match is longer than A's ("a").
 		lex, err := lx.Next()
@@ -2547,11 +2840,11 @@ func TestLexerBoundaryConditions(t *testing.T) {
 		for i := 0; i < maxRules; i++ {
 			ruleType := textlexer.LexemeType(fmt.Sprintf("RULE_%d", i))
 			ruleText := fmt.Sprintf("rule%d", i)
-			err := lx.AddRule(ruleType, matchString(ruleText))
+			err := lx.AddRule(ruleType, newLiteralRule(ruleText))
 			require.NoError(t, err, "Should handle %d rules", i+1)
 		}
 
-		lx.MustAddRule("TEST", matchString("test"))
+		lx.MustAddRule("TEST", newLiteralRule("test"))
 
 		lex, err := lx.Next()
 		require.NoError(t, err)
@@ -2596,8 +2889,8 @@ func TestLexerComplexInteractions(t *testing.T) {
 
 		lx := textlexer.New(strings.NewReader(input))
 		// Keywords first for higher priority on same-length matches.
-		lx.MustAddRule("IF", matchString("if"))
-		lx.MustAddRule("WHILE", matchString("while"))
+		lx.MustAddRule("IF", newLiteralRule("if"))
+		lx.MustAddRule("WHILE", newLiteralRule("while"))
 		lx.MustAddRule("ID", identifierRule)
 		lx.MustAddRule("WS", whitespaceRule)
 
@@ -2725,9 +3018,9 @@ func BenchmarkLexerPerformance(b *testing.B) {
 			for j := 0; j < 100; j++ {
 				ruleType := textlexer.LexemeType(fmt.Sprintf("RULE_%d", j))
 				ruleText := fmt.Sprintf("keyword%d", j)
-				lx.MustAddRule(ruleType, matchString(ruleText))
+				lx.MustAddRule(ruleType, newLiteralRule(ruleText))
 			}
-			lx.MustAddRule("TEST", matchString("test"))
+			lx.MustAddRule("TEST", newLiteralRule("test"))
 			lx.MustAddRule("WS", whitespaceRule)
 
 			for {
@@ -2745,10 +3038,10 @@ func TestLexerErrorConditions(t *testing.T) {
 	t.Run("Duplicate Rule Types", func(t *testing.T) {
 		lx := textlexer.New(strings.NewReader("test"))
 
-		err := lx.AddRule("TEST", matchString("test"))
+		err := lx.AddRule("TEST", newLiteralRule("test"))
 		require.NoError(t, err)
 
-		err = lx.AddRule("TEST", matchString("other"))
+		err = lx.AddRule("TEST", newLiteralRule("other"))
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "TEST")
 	})
@@ -2764,7 +3057,7 @@ func TestLexerErrorConditions(t *testing.T) {
 	t.Run("Empty LexemeType", func(t *testing.T) {
 		lx := textlexer.New(strings.NewReader("test"))
 
-		err := lx.AddRule("", matchString("test"))
+		err := lx.AddRule("", newLiteralRule("test"))
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "empty")
 	})
@@ -2826,6 +3119,7 @@ func TestLexerErrorConditions(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				input := "test"
 
+				// Engine probe: panics on purpose (breaks practice 6).
 				panicRule := func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 					panic(tc.panicValue)
 				}
@@ -2840,7 +3134,7 @@ func TestLexerErrorConditions(t *testing.T) {
 				t.Run("with a sibling", func(t *testing.T) {
 					lx := textlexer.New(strings.NewReader(input))
 					lx.MustAddRule("PANIC", panicRule)
-					lx.MustAddRule("WORD", newLettersRule())
+					lx.MustAddRule("WORD", newASCIILettersRule())
 
 					assertRetireStream(t, lx, []*textlexer.Lexeme{
 						textlexer.NewLexemeFromString("WORD", input, 0),
@@ -2856,6 +3150,8 @@ func TestLexerStateMachineInvariants(t *testing.T) {
 	t.Run("State Transition Validation", func(t *testing.T) {
 		input := "test"
 
+		// Engine probe: records its transitions on purpose (breaks practices 1,
+		// 2, 3, 4 and 6).
 		var transitions []string
 		var mu sync.Mutex
 
@@ -2901,6 +3197,8 @@ func TestLexerStateMachineInvariants(t *testing.T) {
 			event string
 			rune  rune
 		}
+		// Engine probe: records lifecycle events on purpose (breaks practices
+		// 1, 2, 3, 4 and 6).
 		var events []lifecycleEvent
 		var mu sync.Mutex
 
@@ -2958,6 +3256,8 @@ func TestLexerStateMachineInvariants(t *testing.T) {
 	t.Run("Accept Position Tracking", func(t *testing.T) {
 		input := "aaabbb"
 
+		// Engine probe: records accept positions on purpose (breaks practices
+		// 1, 2, 4 and 6).
 		var acceptPositions []int
 		var mu sync.Mutex
 
@@ -2984,7 +3284,7 @@ func TestLexerStateMachineInvariants(t *testing.T) {
 
 		lx := textlexer.New(strings.NewReader(input))
 		lx.MustAddRule("POSITION", positionTrackingRule)
-		lx.MustAddRule("B", matchString("bbb"))
+		lx.MustAddRule("B", newLiteralRule("bbb"))
 
 		lex, err := lx.Next()
 		require.NoError(t, err)
@@ -3037,6 +3337,8 @@ func TestLexerRecoveryMechanisms(t *testing.T) {
 
 	t.Run("Recovery After Rule Deactivation", func(t *testing.T) {
 		input := "test test"
+		// Engine probe: counts its calls in a captured variable on purpose
+		// (breaks practices 2, 3, 4 and 6).
 		callCount := 0
 
 		var selfDeactivatingRule textlexer.Rule
@@ -3107,29 +3409,7 @@ func TestLexerBacktrackingAndBufferState(t *testing.T) {
 	// It does not accept at 'r', because a later pushback could not withdraw that
 	// accept. It continues and decides on the symbol after "for": a letter makes
 	// it reject; any other symbol is pushed back and "for" is accepted.
-	forKeywordRule := func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		if s.Rune() == 'f' {
-			return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-				if s.Rune() == 'o' {
-					return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-						if s.Rune() == 'r' {
-							return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-								// Lookahead: if the next char is a letter, this is not a keyword.
-								if isLetter(s) {
-									return nil, textlexer.StateReject
-								}
-								// It's a keyword. Push back the non-letter symbol.
-								return excludeLast(1, textlexer.StateAccept)
-							}, textlexer.StateContinue
-						}
-						return nil, textlexer.StateReject
-					}, textlexer.StateContinue
-				}
-				return nil, textlexer.StateReject
-			}, textlexer.StateContinue
-		}
-		return nil, textlexer.StateReject
-	}
+	forKeywordRule := newKeywordRule("for", isASCIILetter)
 
 	input := "for format"
 	lx := textlexer.New(strings.NewReader(input))
@@ -3172,7 +3452,7 @@ func TestLexerProcessorRecreationWithNewRules(t *testing.T) {
 
 	input := "a a a b b b"
 	lx := textlexer.New(strings.NewReader(input))
-	lx.MustAddRule(lexTypeA, matchString("a"))
+	lx.MustAddRule(lexTypeA, newLiteralRule("a"))
 	lx.MustAddRule("WS", newWhitespaceRule())
 
 	// Process the first token to ensure the initial processor is created.
@@ -3181,7 +3461,7 @@ func TestLexerProcessorRecreationWithNewRules(t *testing.T) {
 	assert.Equal(t, lexTypeA, lex.Type())
 
 	// Now, add a new rule. This should invalidate the internal processor.
-	err = lx.AddRule(lexTypeB, matchString("b"))
+	err = lx.AddRule(lexTypeB, newLiteralRule("b"))
 	require.NoError(t, err)
 
 	// Continue lexing. The lexer should seamlessly create a new processor
@@ -3211,25 +3491,6 @@ func TestLexerProcessorRecreationWithNewRules(t *testing.T) {
 		lexTypeB,
 	}
 	assert.Equal(t, expectedTypes, foundTypes)
-}
-
-// literalThen returns a Rule that continues over the runes of lit without
-// accepting and hands the symbol after them to then. Any other symbol rejects.
-func literalThen(lit string, then textlexer.Rule) textlexer.Rule {
-	runes := []rune(lit)
-	var step func(i int) textlexer.Rule
-	step = func(i int) textlexer.Rule {
-		if i == len(runes) {
-			return then
-		}
-		return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-			if s.Rune() != runes[i] {
-				return nil, textlexer.StateReject
-			}
-			return step(i + 1), textlexer.StateContinue
-		}
-	}
-	return step(0)
 }
 
 // unknownLexemes returns one single-rune UNKNOWN lexeme for each rune of s, the
@@ -3267,6 +3528,24 @@ func runLookaheadCases(t *testing.T, cases []lookaheadCase, setup func(lx *textl
 	}
 }
 
+// newHTTPBeforeLetterRule returns a rule for http(?=://[A-Za-z]), in Perl
+// notation. It continues through "http://" and one more symbol, then decides.
+// It never accepts before it has decided. At end of input it rejects the EOF
+// symbol, so it matches nothing.
+func newHTTPBeforeLetterRule() textlexer.Rule {
+	var afterScheme textlexer.Rule
+	afterScheme = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
+		if isASCIILetter(s.Rune()) {
+			return excludeLast(4, textlexer.StateAccept) // the letter and "://"
+		}
+		return nil, textlexer.StateReject
+	}
+	return newLiteralThenRule("http://", afterScheme)
+}
+
 // TestLookaheadMultiSymbol: a rule reads four symbols past its match to decide,
 // then excludes all four. "http" is a PROTOCOL only when "://" and a letter
 // follow.
@@ -3276,12 +3555,7 @@ func TestLookaheadMultiSymbol(t *testing.T) {
 	// The rule continues through "http://" and one more symbol. If that symbol
 	// is an ASCII letter, four pushbacks exclude it and "://", and the rule
 	// accepts "http". It never accepts before it has decided.
-	protocolRule := literalThen("http://", func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		if isLetter(s) {
-			return excludeLast(4, textlexer.StateAccept)
-		}
-		return nil, textlexer.StateReject
-	})
+	protocolRule := newHTTPBeforeLetterRule()
 
 	runLookaheadCases(t, []lookaheadCase{
 		{
@@ -3299,37 +3573,55 @@ func TestLookaheadMultiSymbol(t *testing.T) {
 	})
 }
 
+// wikipediaPrefix is the text between "https" and the page name that
+// newWikipediaHTTPSRule requires.
+const wikipediaPrefix = "://wikipedia.org/wiki/"
+
+// isPageNameRune reports whether r is in [A-Za-z0-9_-].
+func isPageNameRune(r rune) bool {
+	return isASCIIWord(r) || r == '-'
+}
+
+// newWikipediaHTTPSRule returns a rule for
+// https(?=://wikipedia\.org/wiki/[A-Za-z0-9_-]+), in Perl notation. The
+// number of symbols it excludes depends on the input. It never accepts before
+// it has decided. At end of input after a non-empty page name it excludes the
+// EOF symbol, the page name and the prefix, and accepts "https"; in any other
+// state it rejects the EOF symbol.
+func newWikipediaHTTPSRule() textlexer.Rule {
+	return newLiteralThenRule("https"+wikipediaPrefix, wikipediaPageName(0))
+}
+
+// wikipediaPageName is the state of newWikipediaHTTPSRule after n page-name
+// runes. The count lives in the returned Rule values.
+func wikipediaPageName(n int) textlexer.Rule {
+	return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			if n == 0 {
+				return nil, textlexer.StateReject
+			}
+			return excludeLast(len(wikipediaPrefix)+n+1, textlexer.StateAccept) // the EOF symbol, the page name and the prefix
+		}
+		if isPageNameRune(s.Rune()) {
+			return wikipediaPageName(n + 1), textlexer.StateContinue
+		}
+		if n == 0 {
+			return nil, textlexer.StateReject
+		}
+		return excludeLast(len(wikipediaPrefix)+n+1, textlexer.StateAccept) // the symbol after the page name, the page name and the prefix
+	}
+}
+
 // TestLookaheadVariableLength: the number of symbols a rule excludes depends on
 // the input. "https" is a PROTOCOL only when "://wikipedia.org/wiki/" and a
 // non-empty page name follow.
 func TestLookaheadVariableLength(t *testing.T) {
-	const (
-		lexTypeProtocol = textlexer.LexemeType("PROTOCOL")
-		prefix          = "://wikipedia.org/wiki/"
-	)
+	const lexTypeProtocol = textlexer.LexemeType("PROTOCOL")
 
-	isPageChar := func(s textlexer.Symbol) bool {
-		r := s.Rune()
-		return isLetter(s) || isDigit(s) || r == '_' || r == '-'
-	}
-
-	// page(n) has read n page-name characters; the count lives in the Rule
-	// values, not in a shared variable. The rule scans the whole page name. On
-	// the first other symbol, or the EOF symbol, it excludes that symbol, the
-	// page name, and the prefix, and accepts "https".
-	var page func(n int) textlexer.Rule
-	page = func(n int) textlexer.Rule {
-		return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-			if isPageChar(s) {
-				return page(n + 1), textlexer.StateContinue
-			}
-			if n == 0 {
-				return nil, textlexer.StateReject
-			}
-			return excludeLast(len(prefix)+n+1, textlexer.StateAccept)
-		}
-	}
-	protocolRule := literalThen("https"+prefix, page(0))
+	// The rule scans the whole page name. On the first other symbol, or the
+	// EOF symbol, it excludes that symbol, the page name, and the prefix, and
+	// accepts "https".
+	protocolRule := newWikipediaHTTPSRule()
 
 	https := textlexer.NewLexemeFromString(lexTypeProtocol, "https", 0)
 
@@ -3369,30 +3661,43 @@ func TestLookaheadVariableLength(t *testing.T) {
 	})
 }
 
+// newTwoCandidateEndsRule returns a rule for ab(?=cd\.*X)|abcd(?=\.*Y), in
+// Perl notation. It chooses between two match ends after it has seen what
+// follows "abcd" and the dots. It never accepts before it has decided. At end
+// of input it rejects the EOF symbol, so it matches nothing.
+func newTwoCandidateEndsRule() textlexer.Rule {
+	return newLiteralThenRule("abcd", dotsAfterABCD(0))
+}
+
+// dotsAfterABCD is the state of newTwoCandidateEndsRule after "abcd" and n
+// '.' symbols.
+func dotsAfterABCD(n int) textlexer.Rule {
+	return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
+		switch s.Rune() {
+		case '.':
+			return dotsAfterABCD(n + 1), textlexer.StateContinue
+		case 'X':
+			return excludeLast(n+3, textlexer.StateAccept) // 'X', the n dots and "cd"
+		case 'Y':
+			return excludeLast(n+1, textlexer.StateAccept) // 'Y' and the n dots
+		}
+		return nil, textlexer.StateReject
+	}
+}
+
 // TestLookaheadTwoCandidateEnds: one rule chooses between two match ends after
 // it has seen what follows. After "abcd" and any number of '.', 'X' yields "ab"
 // and 'Y' yields "abcd".
 func TestLookaheadTwoCandidateEnds(t *testing.T) {
 	const lexTypeR = textlexer.LexemeType("R")
 
-	// dots(n) has read n '.' symbols. 'X' excludes itself, the n dots, and
-	// "cd". 'Y' excludes itself and the n dots. Any other symbol, or the EOF
-	// symbol, rejects.
-	var dots func(n int) textlexer.Rule
-	dots = func(n int) textlexer.Rule {
-		return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-			switch s.Rune() {
-			case '.':
-				return dots(n + 1), textlexer.StateContinue
-			case 'X':
-				return excludeLast(n+3, textlexer.StateAccept)
-			case 'Y':
-				return excludeLast(n+1, textlexer.StateAccept)
-			}
-			return nil, textlexer.StateReject
-		}
-	}
-	rule := literalThen("abcd", dots(0))
+	// After "abcd" and n dots, 'X' excludes itself, the n dots, and "cd". 'Y'
+	// excludes itself and the n dots. Any other symbol, or the EOF symbol,
+	// rejects.
+	rule := newTwoCandidateEndsRule()
 
 	ab := textlexer.NewLexemeFromString(lexTypeR, "ab", 0)
 	abcd := textlexer.NewLexemeFromString(lexTypeR, "abcd", 0)
@@ -3417,12 +3722,7 @@ func TestLookaheadKeywordBoundary(t *testing.T) {
 
 	// After "for", an identifier character rejects. Any other symbol, the EOF
 	// symbol included, is excluded by one pushback and "for" is accepted.
-	forRule := literalThen("for", func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		if isLetter(s) || isDigit(s) || s.Rune() == '_' {
-			return nil, textlexer.StateReject
-		}
-		return excludeLast(1, textlexer.StateAccept)
-	})
+	forRule := newKeywordRule("for", isASCIIWord)
 
 	keyword := textlexer.NewLexemeFromString(lexTypeFor, "for", 0)
 
@@ -3432,6 +3732,98 @@ func TestLookaheadKeywordBoundary(t *testing.T) {
 		{name: "inside a longer word", input: "format", expected: unknownLexemes("format", 0)},
 	}, func(lx *textlexer.TextLexer) {
 		lx.MustAddRule(lexTypeFor, forRule)
+	})
+}
+
+// TestRuleAuthoringEOFPushbackExample is the worked example of practice 5 in
+// docs/rule-authoring.md: newLettersAtEndRule waits for the EOF symbol,
+// excludes it, and emits a non-empty token at end of input. A letter run that
+// does not end the input does not match.
+func TestRuleAuthoringEOFPushbackExample(t *testing.T) {
+	const lexTypeWord = textlexer.LexemeType("WORD")
+
+	runLookaheadCases(t, []lookaheadCase{
+		{
+			name:     "letters that end the input",
+			input:    "ab",
+			expected: []*textlexer.Lexeme{textlexer.NewLexemeFromString(lexTypeWord, "ab", 0)},
+		},
+		{
+			name:     "only the last run ends the input",
+			input:    "ab cd",
+			expected: append(unknownLexemes("ab ", 0), textlexer.NewLexemeFromString(lexTypeWord, "cd", 3)),
+		},
+		{name: "letters before a space", input: "ab ", expected: unknownLexemes("ab ", 0)},
+		{name: "no letter", input: "1", expected: unknownLexemes("1", 0)},
+		{name: "empty input", input: "", expected: nil},
+	}, func(lx *textlexer.TextLexer) {
+		lx.MustAddRule(lexTypeWord, newLettersAtEndRule())
+	})
+}
+
+// properPrefixes returns every non-empty proper prefix of s, rune by rune.
+func properPrefixes(s string) []string {
+	runes := []rune(s)
+	var prefixes []string
+	for i := 1; i < len(runes); i++ {
+		prefixes = append(prefixes, string(runes[:i]))
+	}
+	return prefixes
+}
+
+// TestLookaheadRulesAtEndOfInput: practice 9 of docs/rule-authoring.md. The
+// input ends in each scanning state of the lookahead rules whose own tests do
+// not reach that state at end of input. Each case compares the complete
+// lexeme stream.
+func TestLookaheadRulesAtEndOfInput(t *testing.T) {
+	const lexTypeR = textlexer.LexemeType("R")
+
+	// In these states the lookahead is not complete at end of input, so the
+	// rule matches nothing and every rune is UNKNOWN.
+	for _, tc := range []struct {
+		name   string
+		rule   func() textlexer.Rule
+		inputs []string
+	}{
+		{"http(?=://[A-Za-z])", newHTTPBeforeLetterRule, append(properPrefixes("http://"), "http://")},
+		{"https(?=://wikipedia...)", newWikipediaHTTPSRule, append(properPrefixes("https"+wikipediaPrefix), "https"+wikipediaPrefix)},
+		{"a(?=bc)", newABeforeBCRule, properPrefixes("abc")},
+		{"ab(?=cd\\.*X)|abcd(?=\\.*Y)", newTwoCandidateEndsRule, append(properPrefixes("abcd"), "abcd..")},
+		{"a(?=X)|b(?=Y)|c(?=Z)", newRuneBeforeMarkerRule, []string{"a", "b", "c"}},
+		{"abcd(?=ef)", newABCDBeforeEFRule, append(properPrefixes("abcde"), "abcde")},
+		{"for(?!\\w)", func() textlexer.Rule { return newKeywordRule("for", isASCIIWord) }, properPrefixes("for")},
+		{"\\Afoo", newStartOfInputFooRule, properPrefixes("foo")},
+		{"abcd(?=ef)|abcdefgh", newLookaheadOrLongerRule, append(properPrefixes("abcde"), "abcde")},
+		{"ab(?=c)|ab.*z", newUnboundedLongerRule, []string{"a", "ab", "abx"}},
+		{"ab|abcd(?=ef)", newGrowingAcceptRule, []string{"a"}},
+	} {
+		for _, input := range tc.inputs {
+			t.Run(tc.name+"/"+input, func(t *testing.T) {
+				lx := textlexer.New(strings.NewReader(input))
+				lx.MustAddRule(lexTypeR, tc.rule())
+				assert.Equal(t, lexemeKeys(unknownLexemes(input, 0)), lexemeKeys(lexAll(t, lx)))
+			})
+		}
+	}
+
+	// In these states the rule has a match at end of input.
+	ab := textlexer.NewLexemeFromString(lexTypeR, "ab", 0)
+	t.Run("ab|abcd(?=ef)", func(t *testing.T) {
+		runLookaheadCases(t, []lookaheadCase{
+			{name: "abc", input: "abc", expected: lexemesWith(ab, "c")},
+			{name: "abcd", input: "abcd", expected: lexemesWith(ab, "cd")},
+			{name: "abcde", input: "abcde", expected: lexemesWith(ab, "cde")},
+		}, func(lx *textlexer.TextLexer) {
+			lx.MustAddRule(lexTypeR, newGrowingAcceptRule())
+		})
+	})
+	t.Run("ab(?=c)|ab.*z", func(t *testing.T) {
+		runLookaheadCases(t, []lookaheadCase{
+			{name: "abc", input: "abc", expected: lexemesWith(ab, "c")},
+			{name: "abcx", input: "abcx", expected: lexemesWith(ab, "cx")},
+		}, func(lx *textlexer.TextLexer) {
+			lx.MustAddRule(lexTypeR, newUnboundedLongerRule())
+		})
 	})
 }
 
@@ -3485,6 +3877,191 @@ func TestLookaheadFloatVersusRange(t *testing.T) {
 	})
 }
 
+// The two branches of abcd(?=ef)|abcdefgh.
+const (
+	lookaheadOrLongerLong     = "abcdefgh"         // the longer branch
+	lookaheadOrLongerShortLen = len("abcd")        // the match of the lookahead branch
+	lookaheadOrLongerValidLen = len("abcd" + "ef") // the match plus its lookahead
+)
+
+// newLookaheadOrLongerRule returns one rule for abcd(?=ef)|abcdefgh, built
+// with delayed acceptance and terminal fallback. It never accepts "abcd" while
+// the longer branch is alive: it accepts all eight symbols at 'h'. Once
+// "abcdef" is read, "abcd" is the validated fallback. If 'g' or 'h' fails, one
+// terminal pushback chain excludes every symbol after "abcd" and accepts
+// "abcd". At end of input the same chain also excludes the EOF symbol. Before
+// "abcdef" is complete, any other symbol, or the EOF symbol, rejects.
+func newLookaheadOrLongerRule() textlexer.Rule {
+	return lookaheadOrLongerAt(0)
+}
+
+// lookaheadOrLongerAt(i) has read lookaheadOrLongerLong[:i]. "abcd" is
+// validated once i reaches lookaheadOrLongerValidLen.
+func lookaheadOrLongerAt(i int) textlexer.Rule {
+	validated := i >= lookaheadOrLongerValidLen
+	return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			if validated {
+				// The i-4 symbols after "abcd", and the EOF symbol.
+				return excludeLast(i-lookaheadOrLongerShortLen+1, textlexer.StateAccept)
+			}
+			return nil, textlexer.StateReject
+		}
+		expected := s.Rune() == rune(lookaheadOrLongerLong[i])
+		switch {
+		case expected && i+1 == len(lookaheadOrLongerLong):
+			return nil, textlexer.StateAccept
+		case expected:
+			return lookaheadOrLongerAt(i + 1), textlexer.StateContinue
+		case validated:
+			// The i-4 symbols after "abcd", and s.
+			return excludeLast(i-lookaheadOrLongerShortLen+1, textlexer.StateAccept)
+		}
+		return nil, textlexer.StateReject
+	}
+}
+
+// TestLookaheadDelayedAcceptance: one rule expresses a lookahead branch next to
+// a longer branch, abcd(?=ef)|abcdefgh. The rule delays its accept until the
+// longer branch is dead and then falls back to the validated "abcd" with one
+// terminal pushback chain. See "Lookahead combined with a longer match" in
+// docs/specs/core-contract.md.
+func TestLookaheadDelayedAcceptance(t *testing.T) {
+	const lexTypeMatch = textlexer.LexemeType("MATCH")
+
+	abcd := textlexer.NewLexemeFromString(lexTypeMatch, "abcd", 0)
+
+	runLookaheadCases(t, []lookaheadCase{
+		{
+			name:     "longer branch completes",
+			input:    "abcdefgh",
+			expected: []*textlexer.Lexeme{textlexer.NewLexemeFromString(lexTypeMatch, "abcdefgh", 0)},
+		},
+		{name: "longer branch fails at g", input: "abcdefxx", expected: lexemesWith(abcd, "efxx")},
+		{name: "end of input after the lookahead", input: "abcdef", expected: lexemesWith(abcd, "ef")},
+		{name: "end of input inside the longer branch", input: "abcdefg", expected: lexemesWith(abcd, "efg")},
+		{name: "longer branch fails at h", input: "abcdefgX", expected: lexemesWith(abcd, "efgX")},
+		{name: "end of input inside the lookahead", input: "abcde", expected: unknownLexemes("abcde", 0)},
+		{name: "lookahead fails", input: "abcdX", expected: unknownLexemes("abcdX", 0)},
+		{
+			name:  "two tokens",
+			input: "abcdefghabcdef",
+			expected: append(
+				[]*textlexer.Lexeme{textlexer.NewLexemeFromString(lexTypeMatch, "abcdefgh", 0)},
+				lexemesWith(textlexer.NewLexemeFromString(lexTypeMatch, "abcd", 8), "ef")...,
+			),
+		},
+	}, func(lx *textlexer.TextLexer) {
+		lx.MustAddRule(lexTypeMatch, newLookaheadOrLongerRule())
+	})
+}
+
+// newUnboundedLongerRule returns one rule for ab(?=c)|ab.*z, built with delayed
+// acceptance and terminal fallback. As in Go regexp, '.' matches any rune
+// except a newline. The longer branch ab.*z stays alive until a newline or the
+// end of input, so the rule reads that far before it settles. It accepts at
+// every 'z' after "ab" and keeps scanning for a later 'z'. When the longer
+// branch dies, it falls back to "ab" if 'c' followed "ab": one terminal
+// pushback chain excludes every symbol after "ab" and accepts "ab". At end of
+// input the chain also excludes the EOF symbol. If an accept at a 'z' is
+// already recorded, the only-grows rule ignores that shorter fallback.
+func newUnboundedLongerRule() textlexer.Rule {
+	return unboundedLongerPrefix(0)
+}
+
+// unboundedLongerPrefix(i) has read "ab"[:i], with i < 2.
+func unboundedLongerPrefix(i int) textlexer.Rule {
+	return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
+		expected := s.Rune() == rune("ab"[i])
+		switch {
+		case expected && i == 1:
+			return unboundedLongerTail(0, false), textlexer.StateContinue
+		case expected:
+			return unboundedLongerPrefix(i + 1), textlexer.StateContinue
+		}
+		return nil, textlexer.StateReject
+	}
+}
+
+// unboundedLongerTail(n, validated) has read "ab" and n more symbols.
+// validated reports whether the first of them was 'c', which validates "ab".
+func unboundedLongerTail(n int, validated bool) textlexer.Rule {
+	return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			if validated {
+				// The n symbols after "ab", and the EOF symbol.
+				return excludeLast(n+1, textlexer.StateAccept)
+			}
+			return nil, textlexer.StateReject
+		}
+		validates := n == 0 && s.Rune() == 'c'
+		next := unboundedLongerTail(n+1, validated || validates)
+		switch {
+		case s.Rune() == 'z':
+			return next, textlexer.StateAccept
+		case isNotNewline(s.Rune()):
+			return next, textlexer.StateContinue
+		case validated:
+			// A newline ends ab.*z: the n symbols after "ab", and the newline.
+			return excludeLast(n+1, textlexer.StateAccept)
+		}
+		return nil, textlexer.StateReject
+	}
+}
+
+// TestLookaheadUnboundedReadAheadHitsByteBound: a longer branch that can stay
+// alive without bound reads ahead to the end of input before the token
+// settles, and WithMaxTokenBytes counts that read-ahead. Under ab(?=c)|ab.*z,
+// the final match is "ab", but the rule reads the whole input to decide. See
+// "Speculative lookahead limits" in docs/specs/core-contract.md.
+func TestLookaheadUnboundedReadAheadHitsByteBound(t *testing.T) {
+	const (
+		lexTypeMatch = textlexer.LexemeType("MATCH")
+		maxBytes     = 64
+	)
+
+	ab := textlexer.NewLexemeFromString(lexTypeMatch, "ab", 0)
+	fits := "abc" + strings.Repeat("x", maxBytes-3) // 64 bytes
+	exceeds := fits + "x"                           // 65 bytes
+	require.Len(t, fits, maxBytes)
+	require.Len(t, exceeds, maxBytes+1)
+
+	t.Run("over the bound", func(t *testing.T) {
+		lx := textlexer.NewWithOptions(strings.NewReader(exceeds), textlexer.WithMaxTokenBytes(maxBytes))
+		lx.MustAddRule(lexTypeMatch, newUnboundedLongerRule())
+
+		rejected := func() {
+			lex, err := lx.Next()
+			require.Error(t, err)
+			assert.Nil(t, lex)
+			assert.ErrorIs(t, err, textreader.ErrRetentionExceeded)
+		}
+
+		// A failed Next consumes nothing, so the retry fails the same way. Had
+		// the first call consumed "ab", the 63 bytes left would fit the bound.
+		rejected()
+		rejected()
+	})
+
+	t.Run("within the bound", func(t *testing.T) {
+		lx := textlexer.NewWithOptions(strings.NewReader(fits), textlexer.WithMaxTokenBytes(maxBytes))
+		lx.MustAddRule(lexTypeMatch, newUnboundedLongerRule())
+		assert.Equal(t, lexemeKeys(lexemesWith(ab, fits[2:])), lexemeKeys(lexAll(t, lx)))
+	})
+
+	runLookaheadCases(t, []lookaheadCase{
+		{name: "default lexer, same input", input: exceeds, expected: lexemesWith(ab, exceeds[2:])},
+		{name: "longer branch completes", input: "abcxz", expected: []*textlexer.Lexeme{textlexer.NewLexemeFromString(lexTypeMatch, "abcxz", 0)}},
+		{name: "newline ends the longer branch", input: "abc\nz", expected: lexemesWith(ab, "c\nz")},
+		{name: "lookahead fails", input: "abxx", expected: unknownLexemes("abxx", 0)},
+	}, func(lx *textlexer.TextLexer) {
+		lx.MustAddRule(lexTypeMatch, newUnboundedLongerRule())
+	})
+}
+
 // TestPushBackSymbolOrder: each pushback in a chain shows `next` the next symbol
 // down the stack, starting with the symbol just read. It also shows the count
 // rule: a helper that issues two pushbacks, entered through one more
@@ -3492,6 +4069,8 @@ func TestLookaheadFloatVersusRange(t *testing.T) {
 func TestPushBackSymbolOrder(t *testing.T) {
 	const lexTypeR = textlexer.LexemeType("R")
 
+	// Engine probe: records the symbols it is shown, in hand-built
+	// pushback-chain callbacks, on purpose (breaks practices 1, 2, 4 and 6).
 	var seen []rune
 	// record(k) records the symbol it is shown, then pushes back k more times.
 	var record func(k int) textlexer.Rule
@@ -3504,7 +4083,7 @@ func TestPushBackSymbolOrder(t *testing.T) {
 			return record(k - 1), textlexer.StatePushBack
 		}
 	}
-	rule := literalThen("abc", func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+	rule := newLiteralThenRule("abc", func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 		if s.Rune() != 'd' {
 			return nil, textlexer.StateReject
 		}
@@ -3519,6 +4098,23 @@ func TestPushBackSymbolOrder(t *testing.T) {
 	assert.Equal(t, []rune{'d', 'c', 'b'}, seen, "the chain must see the stack from the top down")
 }
 
+// newABeforeBCRule returns a rule for a(?=bc), in Perl notation. It reads "ab"
+// and decides on the next symbol. It never accepts before it has decided. At
+// end of input it rejects the EOF symbol, so it matches nothing.
+func newABeforeBCRule() textlexer.Rule {
+	var afterAB textlexer.Rule
+	afterAB = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
+		if s.Rune() == 'c' {
+			return excludeLast(2, textlexer.StateAccept) // 'c' and 'b'
+		}
+		return nil, textlexer.StateReject
+	}
+	return newLiteralThenRule("ab", afterAB)
+}
+
 // TestPushBackIsPerRule: one rule's pushback does not change what another rule
 // is shown. The stack is the same for every rule within a step.
 func TestPushBackIsPerRule(t *testing.T) {
@@ -3528,20 +4124,18 @@ func TestPushBackIsPerRule(t *testing.T) {
 	)
 
 	// PUSH reads "ab" and, on 'c', excludes 'c' and 'b' and accepts "a".
-	pushRule := literalThen("ab", func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		if s.Rune() != 'c' {
-			return nil, textlexer.StateReject
-		}
-		return excludeLast(2, textlexer.StateAccept)
-	})
+	pushRule := newABeforeBCRule()
 
 	// SEEN runs after PUSH in each step. It records every symbol it is shown and
 	// accepts every letter.
+	//
+	// Engine probe: records every symbol it is shown on purpose (breaks
+	// practices 2, 4 and 6).
 	var seen []rune
 	var seenRule textlexer.Rule
 	seenRule = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 		seen = append(seen, s.Rune())
-		if isLetter(s) {
+		if isASCIILetter(s.Rune()) {
 			return seenRule, textlexer.StateAccept
 		}
 		return nil, textlexer.StateReject
@@ -3578,7 +4172,9 @@ func TestPushBackAtEOF(t *testing.T) {
 		{3, textlexer.NewLexemeFromString(textlexer.LexemeTypeUnknown, "a", 0)},
 	} {
 		t.Run(fmt.Sprintf("%d pushbacks", tc.pushbacks), func(t *testing.T) {
-			rule := literalThen("a", func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+			// Engine probe: two and three pushbacks exclude more than the
+			// match on purpose (breaks practices 2 and 6).
+			rule := newLiteralThenRule("a", func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 				if !s.IsEOF() {
 					return nil, textlexer.StateReject
 				}
@@ -3598,6 +4194,9 @@ func TestPushBackAtEOF(t *testing.T) {
 func TestPushBackRetiresRuleKeepsEarlierAccept(t *testing.T) {
 	const lexTypeR = textlexer.LexemeType("R")
 
+	// Engine probes: the chains below pass the bottom of the stack, or push
+	// back with no next rule, on purpose (breaks practices 1, 2, 5 and 6).
+	//
 	// more accepts every real symbol. It is reached only if the VM does not
 	// retire the rule, and then the rule would match all of "abc".
 	var more textlexer.Rule
@@ -3663,6 +4262,9 @@ func TestPushBackRetiresRuleKeepsEarlierAccept(t *testing.T) {
 func TestPushBackChainEndingContinue(t *testing.T) {
 	const lexTypeR = textlexer.LexemeType("R")
 
+	// Engine probe: a chain that ends in StateContinue, on purpose (breaks
+	// practices 1, 2 and 5).
+	//
 	// tail accepts every real symbol and rejects the EOF symbol.
 	var tail textlexer.Rule
 	tail = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
@@ -3674,7 +4276,7 @@ func TestPushBackChainEndingContinue(t *testing.T) {
 
 	// The rule reads "ab" and, on the real symbol 'c', pushes 'c' back and
 	// continues into tail. The pushback is forgotten when the step ends.
-	rule := literalThen("ab", func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+	rule := newLiteralThenRule("ab", func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 		return func(textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 			return tail, textlexer.StateContinue
 		}, textlexer.StatePushBack
@@ -3696,6 +4298,9 @@ func TestPushBackChainEndingContinue(t *testing.T) {
 func TestPushBackChainEndingAcceptWithNext(t *testing.T) {
 	const lexTypeR = textlexer.LexemeType("R")
 
+	// Engine probe: a chain that ends in a non-nil next with StateAccept, on
+	// purpose (breaks practices 1, 2 and 5).
+	//
 	// more accepts every real symbol and rejects the EOF symbol.
 	var more textlexer.Rule
 	more = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
@@ -3708,7 +4313,7 @@ func TestPushBackChainEndingAcceptWithNext(t *testing.T) {
 	// The rule continues at 'a' and, on the real symbol 'X', pushes 'X' back
 	// and accepts with next.
 	ruleWithNext := func(next textlexer.Rule) textlexer.Rule {
-		return literalThen("a", func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		return newLiteralThenRule("a", func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 			if s.Rune() != 'X' {
 				return nil, textlexer.StateReject
 			}
@@ -3767,20 +4372,6 @@ func assertRetireStream(t *testing.T, lx *textlexer.TextLexer, expected []*textl
 	assert.Equal(t, io.EOF, err, "lexing must stay at io.EOF")
 }
 
-// newLettersRule matches a run of ASCII letters. It accepts every letter and
-// rejects any other symbol, the EOF symbol included, so it settles at end of
-// input.
-func newLettersRule() textlexer.Rule {
-	var loop textlexer.Rule
-	loop = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		if isLetter(s) {
-			return loop, textlexer.StateAccept
-		}
-		return nil, textlexer.StateReject
-	}
-	return loop
-}
-
 // TestInvalidStateRetiresRule: a State outside the four constants retires only
 // the rule that returned it, as StateReject does. The VM does not panic, and a
 // sibling rule's match is emitted. See KD-1 in docs/specs/core-contract.md.
@@ -3791,6 +4382,9 @@ func TestInvalidStateRetiresRule(t *testing.T) {
 		invalid     = textlexer.State(9)
 	)
 
+	// Engine probes: both return an invalid State on purpose (breaks
+	// practices 1 and 2).
+	//
 	// direct continues on its first symbol and returns the invalid State on
 	// its second.
 	direct := func(textlexer.Symbol) (textlexer.Rule, textlexer.State) {
@@ -3821,7 +4415,7 @@ func TestInvalidStateRetiresRule(t *testing.T) {
 			// BAD is registered first, so it steps before WORD on each symbol.
 			lx := textlexer.New(strings.NewReader("ab"))
 			lx.MustAddRule(lexTypeBad, tc.bad)
-			lx.MustAddRule(lexTypeWord, newLettersRule())
+			lx.MustAddRule(lexTypeWord, newASCIILettersRule())
 
 			assertRetireStream(t, lx, []*textlexer.Lexeme{
 				textlexer.NewLexemeFromString(lexTypeWord, "ab", 0),
@@ -3851,6 +4445,8 @@ func TestAcceptOfEOFSymbolIsDiscarded(t *testing.T) {
 	)
 
 	t.Run("sibling", func(t *testing.T) {
+		// Engine probe: accepts the EOF symbol on purpose (breaks practice 2).
+		//
 		// continueThenAcceptEOF continues on every real symbol and accepts the
 		// EOF symbol. It records no other accept.
 		var continueThenAcceptEOF textlexer.Rule
@@ -3865,7 +4461,7 @@ func TestAcceptOfEOFSymbolIsDiscarded(t *testing.T) {
 		// otherwise be the longest.
 		lx := textlexer.New(strings.NewReader("ab"))
 		lx.MustAddRule(lexTypeR, continueThenAcceptEOF)
-		lx.MustAddRule(lexTypeWord, newLettersRule())
+		lx.MustAddRule(lexTypeWord, newASCIILettersRule())
 
 		assertRetireStream(t, lx, []*textlexer.Lexeme{
 			textlexer.NewLexemeFromString(lexTypeWord, "ab", 0),
@@ -3873,6 +4469,8 @@ func TestAcceptOfEOFSymbolIsDiscarded(t *testing.T) {
 	})
 
 	t.Run("earlier accept by the same rule", func(t *testing.T) {
+		// Engine probe: accepts the EOF symbol on purpose (breaks practice 2).
+		//
 		// acceptAll accepts every letter and also the EOF symbol. Its accept
 		// of "ab" is recorded; its accept of the EOF symbol is discarded.
 		var acceptAll textlexer.Rule
@@ -3880,7 +4478,7 @@ func TestAcceptOfEOFSymbolIsDiscarded(t *testing.T) {
 			if s.IsEOF() {
 				return nil, textlexer.StateAccept
 			}
-			if isLetter(s) {
+			if isASCIILetter(s.Rune()) {
 				return acceptAll, textlexer.StateAccept
 			}
 			return nil, textlexer.StateReject
@@ -3906,6 +4504,8 @@ func TestAcceptOfEOFSymbolIsDiscarded(t *testing.T) {
 		{"pushback excludes the EOF symbol, non-nil next", func(self textlexer.Rule) textlexer.Rule { return self }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			// Engine probe: a hand-built chain callback, with a non-nil next
+			// in one case, on purpose (breaks practices 1, 2 and 5).
 			var rule textlexer.Rule
 			rule = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 				if s.IsEOF() {
@@ -3913,7 +4513,7 @@ func TestAcceptOfEOFSymbolIsDiscarded(t *testing.T) {
 						return tc.next(rule), textlexer.StateAccept
 					}, textlexer.StatePushBack
 				}
-				if isLetter(s) {
+				if isASCIILetter(s.Rune()) {
 					return rule, textlexer.StateContinue
 				}
 				return nil, textlexer.StateReject
@@ -3940,6 +4540,9 @@ func TestStillActiveAtEOFRetiresRule(t *testing.T) {
 		lexTypeSib  = textlexer.LexemeType("SIB")
 	)
 
+	// Engine probes: alwaysContinue never settles, and alwaysAccept accepts the
+	// EOF symbol, on purpose (breaks practices 2 and 6).
+	//
 	// alwaysContinue returns itself with StateContinue on every symbol, the EOF
 	// symbol included. It records no accept.
 	var alwaysContinue textlexer.Rule
@@ -3957,7 +4560,7 @@ func TestStillActiveAtEOFRetiresRule(t *testing.T) {
 	t.Run("StateContinue sibling", func(t *testing.T) {
 		lx := textlexer.New(strings.NewReader("ab"))
 		lx.MustAddRule(lexTypeSib, alwaysContinue)
-		lx.MustAddRule(lexTypeWord, newLettersRule())
+		lx.MustAddRule(lexTypeWord, newASCIILettersRule())
 
 		assertRetireStream(t, lx, []*textlexer.Lexeme{
 			textlexer.NewLexemeFromString(lexTypeWord, "ab", 0),
@@ -3968,7 +4571,7 @@ func TestStillActiveAtEOFRetiresRule(t *testing.T) {
 		// SIB also records "ab", so the two rules tie and WORD, registered
 		// first, wins.
 		lx := textlexer.New(strings.NewReader("ab"))
-		lx.MustAddRule(lexTypeWord, newLettersRule())
+		lx.MustAddRule(lexTypeWord, newASCIILettersRule())
 		lx.MustAddRule(lexTypeSib, alwaysAccept)
 
 		assertRetireStream(t, lx, []*textlexer.Lexeme{
@@ -3981,7 +4584,7 @@ func TestStillActiveAtEOFRetiresRule(t *testing.T) {
 		// before the EOF symbol.
 		lx := textlexer.New(strings.NewReader("ab"))
 		lx.MustAddRule(lexTypeSib, alwaysAccept)
-		lx.MustAddRule(lexTypeWord, newLettersRule())
+		lx.MustAddRule(lexTypeWord, newASCIILettersRule())
 
 		assertRetireStream(t, lx, []*textlexer.Lexeme{
 			textlexer.NewLexemeFromString(lexTypeSib, "ab", 0),
@@ -3990,6 +4593,8 @@ func TestStillActiveAtEOFRetiresRule(t *testing.T) {
 }
 
 // alwaysPanic panics on every symbol it is shown.
+//
+// Engine probe: panics on purpose (breaks practices 2 and 6).
 func alwaysPanic(textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 	panic("rule panicked")
 }
@@ -4005,6 +4610,8 @@ func TestPanicRetiresRule(t *testing.T) {
 		lexTypeBad  = textlexer.LexemeType("BAD")
 	)
 
+	// Engine probes: both panic on purpose (breaks practices 1, 2 and 6).
+	//
 	// direct continues on its first symbol and panics on its second.
 	direct := func(textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 		return alwaysPanic, textlexer.StateContinue
@@ -4029,7 +4636,7 @@ func TestPanicRetiresRule(t *testing.T) {
 			// BAD is registered first, so it steps before WORD on each symbol.
 			lx := textlexer.New(strings.NewReader("ab"))
 			lx.MustAddRule(lexTypeBad, tc.bad)
-			lx.MustAddRule(lexTypeWord, newLettersRule())
+			lx.MustAddRule(lexTypeWord, newASCIILettersRule())
 
 			assertRetireStream(t, lx, []*textlexer.Lexeme{
 				textlexer.NewLexemeFromString(lexTypeWord, "ab", 0),
@@ -4038,7 +4645,7 @@ func TestPanicRetiresRule(t *testing.T) {
 
 		t.Run(tc.name+", sibling registered first", func(t *testing.T) {
 			lx := textlexer.New(strings.NewReader("ab"))
-			lx.MustAddRule(lexTypeWord, newLettersRule())
+			lx.MustAddRule(lexTypeWord, newASCIILettersRule())
 			lx.MustAddRule(lexTypeBad, tc.bad)
 
 			assertRetireStream(t, lx, []*textlexer.Lexeme{
@@ -4065,6 +4672,8 @@ func TestPanicRetiresRule(t *testing.T) {
 func TestPanicKeepsEarlierAccept(t *testing.T) {
 	const lexTypeA = textlexer.LexemeType("A")
 
+	// Engine probes: acceptThenPanic and its next rules panic on purpose
+	// (breaks practices 1, 2 and 6).
 	panicNext := map[string]textlexer.Rule{
 		"direct": alwaysPanic,
 		"in a pushback chain": func(textlexer.Symbol) (textlexer.Rule, textlexer.State) {
@@ -4107,6 +4716,8 @@ func TestPanicLeavesLexerUsable(t *testing.T) {
 
 	input := "abcd " + strings.Repeat("ab ", 40)
 
+	// Engine probe: panics once, recorded in a captured variable, on purpose
+	// (breaks practices 1, 2, 4 and 6).
 	panicked := false
 	var word func(depth int) textlexer.Rule
 	word = func(depth int) textlexer.Rule {
@@ -4115,7 +4726,7 @@ func TestPanicLeavesLexerUsable(t *testing.T) {
 				panicked = true
 				panic("third symbol")
 			}
-			if isLetter(s) {
+			if isASCIILetter(s.Rune()) {
 				return word(depth + 1), textlexer.StateAccept
 			}
 			return nil, textlexer.StateReject
@@ -4173,14 +4784,16 @@ func TestPanickingRuleConcurrentDeterminism(t *testing.T) {
 		// BOOM accepts letters and panics on the first digit, so it panics
 		// once in every identifier token. Its accept of "id" stands, but ID's
 		// longer match wins.
+		// Engine probe: panics and counts its panics on purpose (breaks
+		// practices 2, 4 and 6).
 		var panics atomic.Int64
 		var boom textlexer.Rule
 		boom = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-			if isDigit(s) {
+			if isASCIIDigit(s.Rune()) {
 				panics.Add(1)
 				panic("digit")
 			}
-			if isLetter(s) {
+			if isASCIILetter(s.Rune()) {
 				return boom, textlexer.StateAccept
 			}
 			return nil, textlexer.StateReject

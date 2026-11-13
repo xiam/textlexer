@@ -50,7 +50,7 @@ func TestLexerMarkEvictionExact(t *testing.T) {
 	const input = "a b c d e f"
 
 	lx := textlexer.New(strings.NewReader(input))
-	lx.MustAddRule(lexTypeWord, newAsciiWordRule())
+	lx.MustAddRule(lexTypeWord, newASCIILettersRule())
 	lx.MustAddRule(lexTypeSpace, newSpaceRule())
 
 	lexes := lexAll(t, lx)
@@ -88,7 +88,7 @@ func TestLexerMarkReuseAfterFailures(t *testing.T) {
 	cur := textreader.NewReader(strings.NewReader("ab ccccc"), textreader.WithMaxRetained(6))
 
 	lx := textlexer.NewWithCursor(cur)
-	lx.MustAddRule(lexTypeWord, newAsciiWordRule())
+	lx.MustAddRule(lexTypeWord, newASCIILettersRule())
 	lx.MustAddRule(lexTypeSpace, newSpaceRule())
 
 	first, err := lx.Next()
@@ -121,7 +121,7 @@ func TestLexerMarkReuseAfterRelease(t *testing.T) {
 	const input = "a b c d e f"
 
 	lx := textlexer.New(strings.NewReader(input))
-	lx.MustAddRule(lexTypeWord, newAsciiWordRule())
+	lx.MustAddRule(lexTypeWord, newASCIILettersRule())
 	lx.MustAddRule(lexTypeSpace, newSpaceRule())
 
 	// Commit six tokens (a, " ", b, " ", c, " "), then release the window.
@@ -197,13 +197,13 @@ func TestLexerMarkFallbackWithoutRemark(t *testing.T) {
 
 	newFallback := func() *textlexer.TextLexer {
 		lx := textlexer.NewWithCursor(&plainCursor{inner: textreader.NewReader(strings.NewReader(input))})
-		lx.MustAddRule(lexTypeWord, newAsciiWordRule())
+		lx.MustAddRule(lexTypeWord, newASCIILettersRule())
 		lx.MustAddRule(lexTypeSpace, newSpaceRule())
 		return lx
 	}
 	newReuse := func() *textlexer.TextLexer {
 		lx := textlexer.New(strings.NewReader(input))
-		lx.MustAddRule(lexTypeWord, newAsciiWordRule())
+		lx.MustAddRule(lexTypeWord, newASCIILettersRule())
 		lx.MustAddRule(lexTypeSpace, newSpaceRule())
 		return lx
 	}

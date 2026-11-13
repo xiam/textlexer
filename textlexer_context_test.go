@@ -20,7 +20,7 @@ func TestLexerRetentionFailureConsumesNothing(t *testing.T) {
 		cur := textreader.NewReader(strings.NewReader("abcdef"), textreader.WithMaxRetained(3))
 
 		lx := textlexer.NewWithCursor(cur)
-		lx.MustAddRule(lexTypeWord, newAsciiWordRule())
+		lx.MustAddRule(lexTypeWord, newASCIILettersRule())
 
 		rejected := func() {
 			lex, err := lx.Next()
@@ -40,7 +40,7 @@ func TestLexerRetentionFailureConsumesNothing(t *testing.T) {
 			strings.NewReader("abcdef"),
 			textlexer.WithMaxTokenBytes(3),
 		)
-		lx.MustAddRule(lexTypeWord, newAsciiWordRule())
+		lx.MustAddRule(lexTypeWord, newASCIILettersRule())
 
 		rejected := func() {
 			lex, err := lx.Next()
@@ -61,7 +61,7 @@ func TestLexerRetentionFailureConsumesNothing(t *testing.T) {
 // about, not just the lexeme itself.
 func TestLexerContextReachesPrecedingLexemes(t *testing.T) {
 	lx := textlexer.New(strings.NewReader("one two"))
-	lx.MustAddRule(lexTypeWord, newAsciiWordRule())
+	lx.MustAddRule(lexTypeWord, newASCIILettersRule())
 	lx.MustAddRule(lexTypeSpace, newSpaceRule())
 
 	first, err := lx.Next()
@@ -94,7 +94,7 @@ func TestLexerContextSurvivesFailedNext(t *testing.T) {
 		strings.NewReader("a bbbbb"),
 		textlexer.WithMaxTokenBytes(2),
 	)
-	lx.MustAddRule(lexTypeWord, newAsciiWordRule())
+	lx.MustAddRule(lexTypeWord, newASCIILettersRule())
 	lx.MustAddRule(lexTypeSpace, newSpaceRule())
 
 	first, err := lx.Next()
@@ -121,7 +121,7 @@ func TestLexerContextSurvivesFailedNext(t *testing.T) {
 // nothing, so the previous lexeme's context must stay readable.
 func TestLexerContextSurvivesEOFProbe(t *testing.T) {
 	lx := textlexer.New(strings.NewReader("ab"))
-	lx.MustAddRule(lexTypeWord, newAsciiWordRule())
+	lx.MustAddRule(lexTypeWord, newASCIILettersRule())
 
 	first, err := lx.Next()
 	require.NoError(t, err)

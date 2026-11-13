@@ -8,69 +8,78 @@ import (
 	"github.com/xiam/textlexer"
 )
 
-// isLetter checks if a symbol's rune is an alphabet character.
-func isLetter(s textlexer.Symbol) bool {
-	r := s.Rune()
+// The rules below follow docs/rule-authoring.md: a constructor returns the
+// start state, every state tests the EOF symbol first and ends with an explicit
+// reject, and character classes are named predicates.
+
+// isASCIILetter reports whether r is in [A-Za-z].
+func isASCIILetter(r rune) bool {
 	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
 }
 
-// newWordRule creates a rule that matches any sequence of one or more letters.
+// isASCIIWhitespace reports whether r is in [ \t\n\r].
+func isASCIIWhitespace(r rune) bool {
+	return r == ' ' || r == '\t' || r == '\n' || r == '\r'
+}
+
+// newWordRule returns a rule for [A-Za-z]+. It accepts after each letter. At
+// end of input it rejects the EOF symbol, so the letters read so far stay the
+// match.
 func newWordRule() textlexer.Rule {
-	var loop textlexer.Rule
-	loop = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		if isLetter(s) {
-			return loop, textlexer.StateAccept
+	var letters textlexer.Rule
+	letters = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
+		if isASCIILetter(s.Rune()) {
+			return letters, textlexer.StateAccept
 		}
 		return nil, textlexer.StateReject
 	}
-	return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		if isLetter(s) {
-			return loop, textlexer.StateAccept
-		}
-		return nil, textlexer.StateReject
-	}
+	return letters
 }
 
-// newWhitespaceRule creates a rule that matches any sequence of whitespace.
+// newWhitespaceRule returns a rule for [ \t\n\r]+. It accepts after each
+// whitespace rune. At end of input it rejects the EOF symbol, so the run read
+// so far stays the match.
 func newWhitespaceRule() textlexer.Rule {
-	var loop textlexer.Rule
-	loop = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		r := s.Rune()
-		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
-			return loop, textlexer.StateAccept
+	var blanks textlexer.Rule
+	blanks = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
+		if isASCIIWhitespace(s.Rune()) {
+			return blanks, textlexer.StateAccept
 		}
 		return nil, textlexer.StateReject
 	}
-	return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		r := s.Rune()
-		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
-			return loop, textlexer.StateAccept
-		}
-		return nil, textlexer.StateReject
-	}
+	return blanks
 }
 
-// matchString creates a rule to match an exact string.
-func matchString(s string) textlexer.Rule {
-	var ruleFor func(sub string) textlexer.Rule
-	ruleFor = func(sub string) textlexer.Rule {
-		return func(sym textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-			runes := []rune(sub)
-			if sym.Rune() != runes[0] {
-				return nil, textlexer.StateReject
-			}
-			if len(runes) == 1 {
+// newLiteralRule returns a rule for the literal lit, which must not be empty.
+// It accepts at the last rune of lit and stops. At end of input before that
+// rune it rejects the EOF symbol, so it matches nothing.
+func newLiteralRule(lit string) textlexer.Rule {
+	if lit == "" {
+		panic("newLiteralRule: lit must not be empty")
+	}
+	return literalAt([]rune(lit), 0)
+}
+
+// literalAt is the state of newLiteralRule that reads rune i of lit.
+func literalAt(lit []rune, i int) textlexer.Rule {
+	return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
+		if s.Rune() == lit[i] {
+			if i == len(lit)-1 {
 				return nil, textlexer.StateAccept
 			}
-			return ruleFor(string(runes[1:])), textlexer.StateContinue
+			return literalAt(lit, i+1), textlexer.StateContinue
 		}
+		return nil, textlexer.StateReject
 	}
-	if s == "" {
-		return func(sym textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-			return nil, textlexer.StateAccept
-		}
-	}
-	return ruleFor(s)
 }
 
 func main() {
@@ -82,7 +91,7 @@ func main() {
 
 	// 2. Add our rules. The order matters! We want to find specific
 	//    keywords before falling back to the general "WORD" rule.
-	lx.MustAddRule("KEYWORD", matchString("say"))
+	lx.MustAddRule("KEYWORD", newLiteralRule("say"))
 	lx.MustAddRule("WORD", newWordRule())
 	lx.MustAddRule("WHITESPACE", newWhitespaceRule()) // To handle spaces.
 

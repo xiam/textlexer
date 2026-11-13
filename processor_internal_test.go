@@ -11,19 +11,31 @@ import (
 // UNKNOWN lexeme (textlexer.go:482-485 and processor.go:69-71), so only Process
 // shows which path a token took.
 
-// excludeChain returns the verdict that issues n pushbacks in total and then
-// ends the chain with (nil, s).
-func excludeChain(n int, s State) (Rule, State) {
-	var chain func(k int) Rule
-	chain = func(k int) Rule {
-		return func(Symbol) (Rule, State) {
-			if k == 0 {
-				return nil, s
-			}
-			return chain(k - 1), StatePushBack
-		}
+// Every rule in this file is an engine probe: it exists to drive one path of
+// rulesProcessor, and each one says which practice of docs/rule-authoring.md it
+// breaks on purpose.
+
+// excludeLast returns the verdict of a rule that excludes the last n symbols
+// (n >= 1) from its match and then ends the pushback chain with (nil, s). It is
+// the internal-package copy of the shared helper in textlexer_test.go, which
+// this package cannot import.
+func excludeLast(n int, s State) (Rule, State) {
+	if n < 1 {
+		panic("excludeLast: n must be at least 1")
 	}
-	return chain(n - 1), StatePushBack
+	return pushBackChain(n-1, s), StatePushBack
+}
+
+// pushBackChain returns the pushback-chain callback that issues n more
+// StatePushBack verdicts and then returns (nil, s). It ignores the symbol it is
+// shown, which is already excluded from the match.
+func pushBackChain(n int, s State) Rule {
+	return func(Symbol) (Rule, State) {
+		if n > 0 {
+			return pushBackChain(n-1, s), StatePushBack
+		}
+		return nil, s
+	}
 }
 
 // processInput feeds input and then the EOF symbol to a processor with the one
@@ -58,6 +70,8 @@ func TestProcessPushBackAtEOF(t *testing.T) {
 		{2, "R", 0},
 		{3, LexemeTypeUnknown, 1},
 	} {
+		// Engine probe: two and three pushbacks exclude more than the match
+		// on purpose (breaks practices 1, 2 and 6).
 		rule := func(s Symbol) (Rule, State) {
 			if s.Rune() != 'a' {
 				return nil, StateReject
@@ -66,7 +80,7 @@ func TestProcessPushBackAtEOF(t *testing.T) {
 				if !s.IsEOF() {
 					return nil, StateReject
 				}
-				return excludeChain(tc.pushbacks, StateAccept)
+				return excludeLast(tc.pushbacks, StateAccept)
 			}, StateContinue
 		}
 
@@ -81,12 +95,14 @@ func TestProcessPushBackAtEOF(t *testing.T) {
 // UNKNOWN rune (textlexer.go:482-485). Two pushbacks on the first symbol pass
 // the bottom of the stack instead, and Process reports no match.
 func TestProcessZeroLengthMatch(t *testing.T) {
-	zeroLength := func(Symbol) (Rule, State) { return excludeChain(1, StateAccept) }
+	// Engine probes: an empty match, and a chain past the bottom of the
+	// stack, on purpose (breaks practices 2 and 6).
+	zeroLength := func(Symbol) (Rule, State) { return excludeLast(1, StateAccept) }
 	gotType, gotLen := processInput(t, "Z", zeroLength, "a")
 	assert.Equal(t, LexemeType("Z"), gotType)
 	assert.Equal(t, 0, gotLen)
 
-	overPush := func(Symbol) (Rule, State) { return excludeChain(2, StateAccept) }
+	overPush := func(Symbol) (Rule, State) { return excludeLast(2, StateAccept) }
 	gotType, gotLen = processInput(t, "Z", overPush, "a")
 	assert.Equal(t, LexemeTypeUnknown, gotType)
 	assert.Equal(t, 1, gotLen)
@@ -98,6 +114,8 @@ func TestProcessZeroLengthMatch(t *testing.T) {
 // recorded accept, Process reports UNKNOWN with length 1; an accept recorded
 // before the EOF symbol stays.
 func TestProcessDecidesOnEOFSymbol(t *testing.T) {
+	// Engine probes: never settles, accepts the EOF symbol, and returns an
+	// invalid State, on purpose (breaks practices 1, 2 and 6).
 	var alwaysContinue Rule
 	alwaysContinue = func(Symbol) (Rule, State) { return alwaysContinue, StateContinue }
 
@@ -130,6 +148,9 @@ func TestProcessDecidesOnEOFSymbol(t *testing.T) {
 // through Next in textlexer_test.go.
 func TestCallRule(t *testing.T) {
 	sym := NewSymbol('a', FlagNone)
+
+	// Engine probes: the rules below return each verdict, an invalid State
+	// included, or panic, on purpose (breaks practices 2 and 6).
 
 	t.Run("returned verdicts pass through", func(t *testing.T) {
 		var self Rule

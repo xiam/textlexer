@@ -52,8 +52,8 @@ func newSimpleLexer(t *testing.T, input string) *textlexer.TextLexer {
 	t.Helper()
 
 	lx := textlexer.New(strings.NewReader(input))
-	lx.MustAddRule(lexTypeWord, newLetterRule())
-	lx.MustAddRule(lexTypeNumber, newAsciiNumberRule())
+	lx.MustAddRule(lexTypeWord, newUnicodeLettersRule())
+	lx.MustAddRule(lexTypeNumber, newUnsignedIntegerRule())
 	lx.MustAddRule(lexTypeNewline, newExactRuneRule('\n'))
 	lx.MustAddRule(lexTypeSpace, newSpaceRule())
 
@@ -111,6 +111,41 @@ func TestLexerLexemeSpans(t *testing.T) {
 	assert.Equal(t, 2, onLineTwo.Line())
 }
 
+// newRuneBeforeMarkerRule returns a rule for a(?=X)|b(?=Y)|c(?=Z), in Perl
+// notation. It decides by one symbol of lookahead and never accepts before it
+// has decided. At end of input it rejects the EOF symbol, so it matches
+// nothing.
+func newRuneBeforeMarkerRule() textlexer.Rule {
+	return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
+		switch s.Rune() {
+		case 'a':
+			return beforeMarker('X'), textlexer.StateContinue
+		case 'b':
+			return beforeMarker('Y'), textlexer.StateContinue
+		case 'c':
+			return beforeMarker('Z'), textlexer.StateContinue
+		}
+		return nil, textlexer.StateReject
+	}
+}
+
+// beforeMarker is the state of newRuneBeforeMarkerRule after the rune that
+// marker must follow.
+func beforeMarker(marker rune) textlexer.Rule {
+	return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
+		if s.Rune() == marker {
+			return excludeLast(1, textlexer.StateAccept) // the marker
+		}
+		return nil, textlexer.StateReject
+	}
+}
+
 // TestLexerSpanIsCommittedNotSpeculated drives a rule that reads ahead past the
 // token it matches, then checks that the committed spans cover the input
 // exactly. A token's start must not drift to where speculation stopped.
@@ -120,37 +155,9 @@ func TestLexerSpanIsCommittedNotSpeculated(t *testing.T) {
 	// ruleOne matches "a" only when followed by "X" (and "b" before "Y", "c"
 	// before "Z"): the lexer reads one symbol past the token to decide, then
 	// must commit over exactly one byte. One pushback excludes the lookahead
-	// symbol, and the acceptor ends the chain. The lookahead symbol itself
-	// matches no rule, so it becomes an UNKNOWN lexeme.
-	accept := func(textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		return nil, textlexer.StateAccept
-	}
-	ruleOne := func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		switch s.Rune() {
-		case 'a':
-			return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-				if s.Rune() == 'X' {
-					return accept, textlexer.StatePushBack
-				}
-				return nil, textlexer.StateReject
-			}, textlexer.StateContinue
-		case 'b':
-			return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-				if s.Rune() == 'Y' {
-					return accept, textlexer.StatePushBack
-				}
-				return nil, textlexer.StateReject
-			}, textlexer.StateContinue
-		case 'c':
-			return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-				if s.Rune() == 'Z' {
-					return accept, textlexer.StatePushBack
-				}
-				return nil, textlexer.StateReject
-			}, textlexer.StateContinue
-		}
-		return nil, textlexer.StateReject
-	}
+	// symbol. The lookahead symbol itself matches no rule, so it becomes an
+	// UNKNOWN lexeme.
+	ruleOne := newRuneBeforeMarkerRule()
 
 	lx := textlexer.New(strings.NewReader(input))
 	lx.MustAddRule("LOOKAHEAD", ruleOne)
@@ -177,8 +184,8 @@ func TestLexerSpanIsCommittedNotSpeculated(t *testing.T) {
 // column coordinates.
 func TestLexerRuneReaderSourceSpans(t *testing.T) {
 	lx := textlexer.New(&runeSource{runes: []rune("ab\n世界")})
-	lx.MustAddRule(lexTypeWord, newAsciiWordRule())
-	lx.MustAddRule("CJK", newNonAsciiRule())
+	lx.MustAddRule(lexTypeWord, newASCIILettersRule())
+	lx.MustAddRule("CJK", newNonASCIIRunesRule())
 	lx.MustAddRule(lexTypeNewline, newExactRuneRule('\n'))
 	lx.MustAddRule(lexTypeSpace, newSpaceRule())
 
@@ -213,8 +220,8 @@ func TestLexerRuneReaderSourceSpans(t *testing.T) {
 func TestLexerMaxTokenBytes(t *testing.T) {
 	t.Run("within the bound", func(t *testing.T) {
 		lx := textlexer.NewWithOptions(strings.NewReader("12345 abc"), textlexer.WithMaxTokenBytes(64))
-		lx.MustAddRule(lexTypeWord, newAsciiWordRule())
-		lx.MustAddRule(lexTypeNumber, newAsciiNumberRule())
+		lx.MustAddRule(lexTypeWord, newASCIILettersRule())
+		lx.MustAddRule(lexTypeNumber, newUnsignedIntegerRule())
 		lx.MustAddRule(lexTypeSpace, newSpaceRule())
 
 		found := lexAll(t, lx)
@@ -226,7 +233,7 @@ func TestLexerMaxTokenBytes(t *testing.T) {
 	t.Run("over the bound", func(t *testing.T) {
 		lx := textlexer.NewWithOptions(strings.NewReader(strings.Repeat("a", 1024)),
 			textlexer.WithMaxTokenBytes(32))
-		lx.MustAddRule(lexTypeWord, newAsciiWordRule())
+		lx.MustAddRule(lexTypeWord, newASCIILettersRule())
 
 		lex, err := lx.Next()
 		require.Error(t, err)
@@ -240,7 +247,7 @@ func TestLexerMaxTokenBytes(t *testing.T) {
 // and stops working once later tokens push it out.
 func TestLexerContext(t *testing.T) {
 	lx := textlexer.New(strings.NewReader("one two three"))
-	lx.MustAddRule(lexTypeWord, newAsciiWordRule())
+	lx.MustAddRule(lexTypeWord, newASCIILettersRule())
 	lx.MustAddRule(lexTypeSpace, newSpaceRule())
 
 	first, err := lx.Next()
@@ -278,7 +285,7 @@ func TestLexerNewWithCursor(t *testing.T) {
 	cur := textreader.NewReader(strings.NewReader("ab\ncd"))
 
 	lx := textlexer.NewWithCursor(cur)
-	lx.MustAddRule(lexTypeWord, newAsciiWordRule())
+	lx.MustAddRule(lexTypeWord, newASCIILettersRule())
 	lx.MustAddRule(lexTypeNewline, newExactRuneRule('\n'))
 
 	found := lexAll(t, lx)
@@ -292,69 +299,44 @@ func TestLexerNewWithCursor(t *testing.T) {
 
 func TestLexerContextRejectsNilLexeme(t *testing.T) {
 	lx := textlexer.New(strings.NewReader("x"))
-	lx.MustAddRule(lexTypeWord, newAsciiWordRule())
+	lx.MustAddRule(lexTypeWord, newASCIILettersRule())
 
 	_, err := lx.Context(nil, 1, 1)
 	require.Error(t, err)
 }
 
-// newAsciiWordRule matches a run of ASCII letters.
-func newAsciiWordRule() textlexer.Rule {
-	var rule textlexer.Rule
-	rule = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		r := s.Rune()
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
-			return rule, textlexer.StateAccept
-		}
-		return nil, textlexer.StateReject
-	}
-	return rule
+// isUnicodeLetter reports whether r is in \pL.
+func isUnicodeLetter(r rune) bool { return unicode.IsLetter(r) }
+
+// isNonASCII reports whether r is in [^\x00-\x7F].
+func isNonASCII(r rune) bool { return r >= 0x80 }
+
+// newUnicodeLettersRule returns a rule for \pL+. It accepts after each letter.
+// At end of input it rejects the EOF symbol, so the letters read so far stay
+// the match.
+func newUnicodeLettersRule() textlexer.Rule {
+	return newRunePlusRule(isUnicodeLetter)
 }
 
-// newLetterRule matches a run of Unicode letters.
-func newLetterRule() textlexer.Rule {
-	var rule textlexer.Rule
-	rule = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		if unicode.IsLetter(s.Rune()) {
-			return rule, textlexer.StateAccept
-		}
-		return nil, textlexer.StateReject
-	}
-	return rule
+// newNonASCIIRunesRule returns a rule for [^\x00-\x7F]+. It accepts after each
+// non-ASCII rune. At end of input it rejects the EOF symbol, so the runes read
+// so far stay the match.
+func newNonASCIIRunesRule() textlexer.Rule {
+	return newRunePlusRule(isNonASCII)
 }
 
-// newNonAsciiRule matches a run of non-ASCII runes.
-func newNonAsciiRule() textlexer.Rule {
-	var rule textlexer.Rule
-	rule = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		if s.Rune() >= 0x80 {
-			return rule, textlexer.StateAccept
-		}
-		return nil, textlexer.StateReject
-	}
-	return rule
-}
-
-// newAsciiNumberRule matches a run of ASCII digits.
-func newAsciiNumberRule() textlexer.Rule {
-	var rule textlexer.Rule
-	rule = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
-		if r := s.Rune(); r >= '0' && r <= '9' {
-			return rule, textlexer.StateAccept
-		}
-		return nil, textlexer.StateReject
-	}
-	return rule
-}
-
-// newSpaceRule matches a single space.
+// newSpaceRule returns a rule for a single space, " ".
 func newSpaceRule() textlexer.Rule {
 	return newExactRuneRule(' ')
 }
 
-// newExactRuneRule matches exactly one occurrence of r.
+// newExactRuneRule returns a rule for the single rune r. It accepts r and
+// stops. At end of input it rejects the EOF symbol.
 func newExactRuneRule(r rune) textlexer.Rule {
 	return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		if s.IsEOF() {
+			return nil, textlexer.StateReject
+		}
 		if s.Rune() == r {
 			return nil, textlexer.StateAccept
 		}
@@ -387,8 +369,8 @@ func BenchmarkLexerCursor(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		lx := textlexer.New(strings.NewReader(input))
-		lx.MustAddRule(lexTypeWord, newAsciiWordRule())
-		lx.MustAddRule(lexTypeNumber, newAsciiNumberRule())
+		lx.MustAddRule(lexTypeWord, newASCIILettersRule())
+		lx.MustAddRule(lexTypeNumber, newUnsignedIntegerRule())
 		lx.MustAddRule(lexTypeNewline, newExactRuneRule('\n'))
 		lx.MustAddRule(lexTypeSpace, newSpaceRule())
 
