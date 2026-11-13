@@ -431,6 +431,8 @@ Probe results are from scratch programs run outside the repository.
   `abcX`. Remembering the count across steps would itself break principle 1.
   Evidence: `TestPushBackChainEndingContinue` and
   `TestPushBackChainEndingAcceptWithNext`.
+  For a lookahead branch next to a longer branch, see
+  [Lookahead combined with a longer match](#lookahead-combined-with-a-longer-match).
 - **KD-6. `(nil, StateContinue)`.** Conforms to principles 2 and 3. The VM
   retires the rule (`processor.go:130-131`, `140-142`). Evidence:
   `TestLexerProcessor` "Rule returns nil, StateContinue".
@@ -889,6 +891,41 @@ records its accept as `(nil, StateAccept)` would, and a chain that ends in
 "pushback excludes the EOF symbol, non-nil next". See
 [EOF handling](#eof-handling).
 
+#### Lookahead combined with a longer match
+
+**Current contract.** An alternation where one branch ends in lookahead and
+another branch matches longer text, such as `abcd(?=ef)|abcdefgh`, is written
+as one rule with **delayed acceptance and terminal fallback**:
+
+- The rule does not accept the shorter, lookahead-validated match while a
+  longer branch is still alive. It returns `StateContinue` and keeps scanning.
+  It keeps the validated end in the `Rule` values it returns (see
+  [principle 1](#principle-1-stateless-stack-model)).
+- When a longer branch completes, the rule accepts everything it has read, as
+  any plain accept does. If another branch can still grow, it returns a
+  non-nil `next` with that accept.
+- When every longer branch is dead, the rule ends with one terminal pushback
+  chain to the last validated shorter match, which ends in
+  `(nil, StateAccept)`. The chain excludes every symbol read after that match,
+  including the symbol that ended the longer branch. When the input ends the
+  longer branch, the chain counts the EOF symbol too: after `abcdef`, it
+  excludes `e`, `f`, and the EOF symbol. If no shorter match was validated, the
+  rule rejects.
+- An accept that the rule already recorded for a longer match stays. The
+  only-grows rule ignores the shorter fallback.
+
+The alternative is to accept the shorter match early and then continue
+scanning for the longer one. That needs a chain that ends in
+`(non-nil next, StateAccept)`, and that ending is unsupported
+([KD-5](#known-deviations)). Delayed acceptance needs no such ending, and no
+engine or registration change. Evidence: `TestLookaheadDelayedAcceptance`
+(`abcdefgh` yields `MATCH "abcdefgh"`; `abcdefxx`, `abcdefgX`, `abcdef` and
+`abcdefg` yield `MATCH "abcd"` and then one `UNKNOWN` per rune; `abcde` and
+`abcdX` yield one `UNKNOWN` per rune; `abcdefghabcdef` yields
+`MATCH "abcdefgh"`, `MATCH "abcd"` at offset 8, and `UNKNOWN` `e` and `f`).
+The read-ahead cost of this construction is in
+[Speculative lookahead limits](#speculative-lookahead-limits).
+
 ### Progress and zero-length behavior
 
 **Current contract.** The engine guarantees forward progress: a token is never
@@ -1025,6 +1062,36 @@ bound returns `ErrRetentionExceeded` with no lexeme);
 bound lex fully); `TestLexerRetentionFailureConsumesNothing` (the bound fires with
 no progress).
 
+**Current contract — a longer branch without a bound.** A rule built as in
+[Lookahead combined with a longer match](#lookahead-combined-with-a-longer-match)
+settles only when every longer branch is dead. If a longer branch can stay
+alive without bound, as `ab.*z` can, the rule reads ahead to the end of input,
+or to the first symbol that ends that branch, before the token settles. It does
+so even when the final match is short. This cost comes from longest-match
+semantics, not from the construction.
+
+- **Worst case: quadratic over repeated tokens.** When every token of a
+  repeated-token family reads ahead to the end of input, the total work is
+  quadratic in the input length. For example, under `ab(?=c)|ab.*z` on repeated
+  `abc`, every `ab` token reads to the end of input. On 30, 300, and 3,000
+  bytes the rule is called 341, 30,401, and 3,004,001 times; 155, 15,050, and
+  1,500,500 of those calls return `StatePushBack`. This is a worst case, not
+  the cost for every input: a token whose longer branch dies early reads only
+  that far.
+- **Byte bound.** With `WithMaxTokenBytes(n)` the read-ahead counts toward the
+  bound. The token fails with an error wrapping
+  `textreader.ErrRetentionExceeded` when the read-ahead exceeds `n` bytes, even
+  when the final match is short. The failed `Next` consumes nothing, so a retry
+  fails the same way.
+
+**Evidence.** `TestLookaheadUnboundedReadAheadHitsByteBound` (`ab(?=c)|ab.*z`
+under `WithMaxTokenBytes(64)` on 65 bytes that start with `abc`: two calls to
+`Next` each return no lexeme and an error wrapping
+`textreader.ErrRetentionExceeded`; on 64 bytes, and on the 65 bytes with the
+default unbounded lexer, the first lexeme is `MATCH "ab"`). The call counts
+come from an uncommitted probe that wraps the rule of that test in a call
+counter.
+
 ### Concurrency boundaries
 
 **Current contract.**
@@ -1112,6 +1179,8 @@ the items below are not duties the VM depends on. They describe how to write a
 rule that gets its intended match, and what the VM does today when a rule does
 otherwise. Where today's reaction breaks a principle, the item names the Known
 deviation.
+How to write and review a rule in this repository is in the
+[rule-authoring standard](../rule-authoring.md).
 
 - **Handle EOF.** To keep its match at end of input, a rule rejects (or pushes
   back) the EOF symbol and does not accept it. A pushback at end of input

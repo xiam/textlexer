@@ -65,7 +65,7 @@ func BenchmarkComplexTokens(b *testing.B) {
 		lx.MustAddRule("ID", idRule)
 		lx.MustAddRule("WS", wsRule)
 		lx.MustAddRule("SYMBOL", symbolRule)
-		lx.MustAddRule("KEYWORD", matchAnyOf("SELECT", "FROM", "WHERE"))
+		lx.MustAddRule("KEYWORD", newLiteralAlternationRule("SELECT", "FROM", "WHERE"))
 
 		for {
 			lex, err := lx.Next()
@@ -91,9 +91,9 @@ func BenchmarkLongestMatchContention(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		lx := textlexer.New(strings.NewReader(input))
-		lx.MustAddRule("IF", matchString("if"))
-		lx.MustAddRule("IFELSE", matchString("ifelse"))
-		lx.MustAddRule("FOR", matchString("for"))
+		lx.MustAddRule("IF", newLiteralRule("if"))
+		lx.MustAddRule("IFELSE", newLiteralRule("ifelse"))
+		lx.MustAddRule("FOR", newLiteralRule("for"))
 		lx.MustAddRule("ID", idRule) // Will match "iffy" and "fore"
 		lx.MustAddRule("WS", wsRule)
 
@@ -113,14 +113,14 @@ func BenchmarkLongestMatchContention(b *testing.B) {
 func BenchmarkManyRules(b *testing.B) {
 	input := strings.Repeat("find_me ", 1000)
 	wsRule := newWhitespaceRule()
-	targetRule := matchString("find_me")
+	targetRule := newLiteralRule("find_me")
 
 	const numRules = 500
 	rules := make(map[textlexer.LexemeType]textlexer.Rule, numRules)
 	for i := 0; i < numRules; i++ {
 		ruleType := textlexer.LexemeType(fmt.Sprintf("RULE_%d", i))
 		ruleText := fmt.Sprintf("keyword%d", i)
-		rules[ruleType] = matchString(ruleText)
+		rules[ruleType] = newLiteralRule(ruleText)
 	}
 
 	b.ReportAllocs()

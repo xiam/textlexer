@@ -88,9 +88,9 @@ func main() {
 	lx := textlexer.New(strings.NewReader(myText))
 
 	// 2. Add rules for what we want to find. The order matters!
-	//    (Rule helper functions like matchString and newWordRule are
+	//    (Rule helper functions like newLiteralRule and newWordRule are
 	//    defined in the full example.)
-	lx.MustAddRule("KEYWORD", matchString("say"))
+	lx.MustAddRule("KEYWORD", newLiteralRule("say"))
 	lx.MustAddRule("WORD", newWordRule())
 	lx.MustAddRule("WHITESPACE", newWhitespaceRule())
 

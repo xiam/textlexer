@@ -9,6 +9,9 @@ This directory is the documentation home for `textlexer`.
   statement in it carries an explicit status — **current contract**, **intended
   capability**, or **open design question** — so the engine available today
   never reads as if it includes capabilities that are still to be designed.
+- [rule-authoring.md](rule-authoring.md) is the **rule-authoring standard**:
+  how to write a rule and how to check one, with a reviewer checklist. It is
+  normative for every rule in this repository and is guidance for consumers.
 - The [root README](../README.md) is the project README: what the toolkit is,
   what it can do today, a runnable example, installation, and layering. It links
   here for the specification.
@@ -28,6 +31,7 @@ A substantive promise with no status is a documentation bug — flag it.
 ## Where things live
 
 - **Specification.** [specs/core-contract.md](specs/core-contract.md).
+- **Rule-authoring standard.** [rule-authoring.md](rule-authoring.md).
 - **Runnable example.**
   [`internal/examples/hello/main.go`](../internal/examples/hello/main.go) — a
   complete program using only the current API, with the rule helpers defined
