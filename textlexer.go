@@ -467,11 +467,14 @@ func (lx *TextLexer) nextLexeme() (*Lexeme, error) {
 
 		typ, textLen := processor.Process(sym)
 
-		// textLen < 0 means the rule needs more input to decide.
+		// textLen < 0 means a rule is still active and needs more input.
 		if textLen < 0 {
 			if isEOF {
-				// Processor wants more input but we hit EOF.
-				return abandon(fmt.Errorf("lexer: rule remained inconclusive at EOF"))
+				// Defensive, unreachable: processSymbol retires every rule
+				// after the EOF symbol, so Process always decides on it.
+				// The check stays so that a broken invariant fails the token
+				// instead of reading past the end of input forever.
+				return abandon(fmt.Errorf("lexer: internal error: processor undecided after the EOF symbol"))
 			}
 			continue
 		}
@@ -495,7 +498,12 @@ func (lx *TextLexer) nextLexeme() (*Lexeme, error) {
 		}
 
 		if textLen > len(symbols) {
-			return abandon(fmt.Errorf("lexer: rule matched %d symbols, only %d were read", textLen, len(symbols)))
+			// Defensive, unreachable: processSymbol discards an accept that
+			// counts the EOF symbol, and before the EOF symbol the stack
+			// holds only real symbols, so no recorded match is longer than
+			// the symbols read. The check stays so that a broken invariant
+			// fails the token instead of slicing past the symbols read.
+			return abandon(fmt.Errorf("lexer: internal error: match of %d symbols exceeds the %d symbols read", textLen, len(symbols)))
 		}
 
 		winner := symbols[:textLen]

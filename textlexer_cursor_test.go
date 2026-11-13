@@ -117,29 +117,34 @@ func TestLexerLexemeSpans(t *testing.T) {
 func TestLexerSpanIsCommittedNotSpeculated(t *testing.T) {
 	const input = "aXbYcZ"
 
-	// ruleOne matches "a" only when followed by "X": the lexer reads one symbol
-	// past the token to decide, then must commit over exactly one byte.
-	var ruleOne textlexer.Rule
-	ruleOne = func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+	// ruleOne matches "a" only when followed by "X" (and "b" before "Y", "c"
+	// before "Z"): the lexer reads one symbol past the token to decide, then
+	// must commit over exactly one byte. One pushback excludes the lookahead
+	// symbol, and the acceptor ends the chain. The lookahead symbol itself
+	// matches no rule, so it becomes an UNKNOWN lexeme.
+	accept := func(textlexer.Symbol) (textlexer.Rule, textlexer.State) {
+		return nil, textlexer.StateAccept
+	}
+	ruleOne := func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 		switch s.Rune() {
 		case 'a':
 			return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 				if s.Rune() == 'X' {
-					return nil, textlexer.StatePushBack
+					return accept, textlexer.StatePushBack
 				}
 				return nil, textlexer.StateReject
 			}, textlexer.StateContinue
 		case 'b':
 			return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 				if s.Rune() == 'Y' {
-					return nil, textlexer.StatePushBack
+					return accept, textlexer.StatePushBack
 				}
 				return nil, textlexer.StateReject
 			}, textlexer.StateContinue
 		case 'c':
 			return func(s textlexer.Symbol) (textlexer.Rule, textlexer.State) {
 				if s.Rune() == 'Z' {
-					return nil, textlexer.StatePushBack
+					return accept, textlexer.StatePushBack
 				}
 				return nil, textlexer.StateReject
 			}, textlexer.StateContinue
@@ -154,6 +159,11 @@ func TestLexerSpanIsCommittedNotSpeculated(t *testing.T) {
 
 	require.Len(t, found, 6)
 	for i, lex := range found {
+		wantType := textlexer.LexemeType("LOOKAHEAD")
+		if i%2 == 1 {
+			wantType = textlexer.LexemeTypeUnknown
+		}
+		assert.Equal(t, wantType, lex.Type(), "token %d", i)
 		assert.Equal(t, string(input[i]), lex.Text())
 		assert.Equal(t, i, lex.ByteOffset(), "token %d must start at its own byte", i)
 		assert.Equal(t, i, lex.RuneOffset())
